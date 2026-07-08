@@ -45,15 +45,17 @@ class GameEngine:
             return
 
         selected_piece = self.board.get_piece(self.selected_pos.row, self.selected_pos.col)
-        
-        # ההגנה החשובה: מוודאים שזה אובייקט ולא מחרוזת נקודה "." לפני שבודקים color
+
+        # אם ביעד יש כלי ידידותי — בחר אותו במקום (לא מהלך חוקי)
         if clicked_piece != "." and hasattr(clicked_piece, 'color') and hasattr(selected_piece, 'color') and clicked_piece.color == selected_piece.color:
             self.selected_pos = current_click_pos
-        else:
-            if selected_piece != "." and hasattr(selected_piece, 'is_legal_shape'):
-                if selected_piece.is_legal_shape(self.selected_pos, current_click_pos):
-                    self.request_move(self.selected_pos, current_click_pos, selected_piece)
-            self.selected_pos = None
+            return
+
+        # מהלך חוקי רק אם: יעד ריק, או כלי אויב
+        if selected_piece != "." and hasattr(selected_piece, 'is_legal_shape'):
+            if selected_piece.is_legal_shape(self.selected_pos, current_click_pos, self.board):
+                self.request_move(self.selected_pos, current_click_pos, selected_piece)
+        self.selected_pos = None
 
     def request_move(self, from_pos: Position, to_pos: Position, piece):
         if from_pos == to_pos:
@@ -70,5 +72,6 @@ class GameEngine:
                 completed_moves.append(move)
 
         for move in completed_moves:
+            # דורס כל מה שיש ביעד (ריק או כלי אויב — שניהם מוחלפים בכלי הנע)
             self.board.set_piece(move.to_pos.row, move.to_pos.col, move.piece)
             self.active_moves.remove(move)
