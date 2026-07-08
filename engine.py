@@ -34,8 +34,8 @@ class GameEngine:
             print(canonical_board)
 
     def handle_click(self, x: int, y: int):
-        col = x // CELL_SIZE_PIXELS
-        row = y // CELL_SIZE_PIXELS
+        col = x // self.CELL_SIZE_PIXELS
+        row = y // self.CELL_SIZE_PIXELS
 
         if not self.board.is_valid_position(row, col):
             return
