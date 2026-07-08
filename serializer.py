@@ -1,5 +1,7 @@
 import sys
 from entities.board import Board
+from entities.piece import Piece
+from entities.strategies import STRATEGIES_MAP
 
 class TextBoardSerializer:
     VALID_PIECES = {"K", "Q", "R", "B", "N", "P"}
@@ -17,7 +19,6 @@ class TextBoardSerializer:
     @staticmethod
     def parse(input_text: str) -> Board:
         lines = [line.strip() for line in input_text.strip().split("\n") if line.strip()]
-        
         board_lines = []
         in_board_section = False
         
@@ -35,9 +36,7 @@ class TextBoardSerializer:
             sys.exit(0)
 
         height = len(board_lines)
-        first_row_tokens = board_lines[0].split()
-        width = len(first_row_tokens)
-
+        width = len(board_lines[0].split())
         board = Board(width, height)
 
         for row_idx, line in enumerate(board_lines):
@@ -48,13 +47,27 @@ class TextBoardSerializer:
             
             for col_idx, token in enumerate(tokens):
                 TextBoardSerializer.validate_token(token)
-                board.set_piece(row_idx, col_idx, token)
-
+                if token == ".":
+                    board.set_piece(row_idx, col_idx, ".")
+                else:
+                    color = token[0]
+                    role = token[1]
+                    strategy = STRATEGIES_MAP[role]  # שליפת האסטרטגיה המתאימה
+                    # הזרקת האסטרטגיה ליצירת ה-Piece
+                    piece_obj = Piece(color, role, strategy)
+                    board.set_piece(row_idx, col_idx, piece_obj)
         return board
 
     @staticmethod
     def serialize(board: Board) -> str:
         result_rows = []
         for row in board.grid:
-            result_rows.append(" ".join(row))
+            row_strings = []
+            for item in row:
+                if item == ".":
+                    row_strings.append(".")
+                else:
+                    # שחזור הטוקן הטקסטואלי מתוך תכונות ה-Piece
+                    row_strings.append(f"{item.color}{item.role}")
+            result_rows.append(" ".join(row_strings))
         return "\n".join(result_rows)

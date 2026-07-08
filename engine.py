@@ -3,10 +3,10 @@ from entities.position import Position
 from serializer import TextBoardSerializer
 
 class ActiveMove:
-    def __init__(self, from_pos: Position, to_pos: Position, piece: str, remaining_ms: int):
+    def __init__(self, from_pos: Position, to_pos: Position, piece, remaining_ms: int):
         self.from_pos = from_pos
         self.to_pos = to_pos
-        self.piece = piece
+        self.piece = piece  # כעת זה אובייקט Piece
         self.remaining_ms = remaining_ms
 
 class GameEngine:
@@ -18,20 +18,16 @@ class GameEngine:
         self.DEFAULT_MOVE_DURATION = 1000 
 
     def execute_command(self, cmd_text: str):
-        """פונקציה מרכזית שמקבלת פקודה ומנתבת אותה - מנקה את ה-Main!"""
         if cmd_text.startswith("click"):
             parts = cmd_text.split()
             if len(parts) == 3:
                 self.handle_click(int(parts[1]), int(parts[2]))
-                
         elif cmd_text.startswith("wait"):
             parts = cmd_text.split()
             if len(parts) == 2:
                 self.advance_time(int(parts[1]))
-                
         elif cmd_text == "print board":
-            canonical_board = TextBoardSerializer.serialize(self.board)
-            print(canonical_board)
+            print(TextBoardSerializer.serialize(self.board))
 
     def handle_click(self, x: int, y: int):
         col = x // self.CELL_SIZE_PIXELS
@@ -50,13 +46,19 @@ class GameEngine:
 
         selected_piece = self.board.get_piece(self.selected_pos.row, self.selected_pos.col)
         
-        if clicked_piece != "." and clicked_piece[0] == selected_piece[0]:
+        # בדיקת צבע - אם לחצנו על כלי אחר באותו צבע, נחליף את הבחירה
+        if clicked_piece != "." and clicked_piece.color == selected_piece.color:
             self.selected_pos = current_click_pos
         else:
-            self.request_move(self.selected_pos, current_click_pos, selected_piece)
+            # --- ההגנה החדשה של איטרציה 3! ---
+            # נשאל את הכלי האם המהלך חוקי מבחינת הצורה שלו
+            if selected_piece.is_legal_shape(self.selected_pos, current_click_pos):
+                self.request_move(self.selected_pos, current_click_pos, selected_piece)
+            
+            # אם המהלך לא חוקי, אנחנו פשוט מאפסים את הבחירה ומתעלמים
             self.selected_pos = None 
 
-    def request_move(self, from_pos: Position, to_pos: Position, piece: str):
+    def request_move(self, from_pos: Position, to_pos: Position, piece):
         if from_pos == to_pos:
             return
         self.board.set_piece(from_pos.row, from_pos.col, ".")
