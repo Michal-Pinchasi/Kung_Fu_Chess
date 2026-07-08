@@ -15,7 +15,7 @@ class GameEngine:
         self.board = board
         self.selected_pos = None
         self.active_moves = []
-        self.DEFAULT_MOVE_DURATION = 1000 
+        self.DEFAULT_MOVE_DURATION = 2000 
 
     def execute_command(self, cmd_text: str):
         if cmd_text.startswith("click"):
@@ -60,7 +60,7 @@ class GameEngine:
     def request_move(self, from_pos: Position, to_pos: Position, piece):
         if from_pos == to_pos:
             return
-        self.board.set_piece(from_pos.row, from_pos.col, ".")
+        # הכלי נשאר על הלוח במקור עד שהמהלך מסתיים
         new_move = ActiveMove(from_pos, to_pos, piece, self.DEFAULT_MOVE_DURATION)
         self.active_moves.append(new_move)
 
@@ -72,6 +72,7 @@ class GameEngine:
                 completed_moves.append(move)
 
         for move in completed_moves:
-            # דורס כל מה שיש ביעד (ריק או כלי אויב — שניהם מוחלפים בכלי הנע)
+            # קודם מנקים את המקור, אחר כך מציבים ביעד
+            self.board.set_piece(move.from_pos.row, move.from_pos.col, ".")
             self.board.set_piece(move.to_pos.row, move.to_pos.col, move.piece)
             self.active_moves.remove(move)
