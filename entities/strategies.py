@@ -15,13 +15,13 @@ def _path_is_clear(from_pos, to_pos, board) -> bool:
     return True
 
 
-def king_move_strategy(from_pos, to_pos, board=None) -> bool:
+def king_move_strategy(from_pos, to_pos, board=None, piece=None) -> bool:
     delta_row = abs(from_pos.row - to_pos.row)
     delta_col = abs(from_pos.col - to_pos.col)
     return delta_row <= 1 and delta_col <= 1
 
 
-def rook_move_strategy(from_pos, to_pos, board=None) -> bool:
+def rook_move_strategy(from_pos, to_pos, board=None, piece=None) -> bool:
     if from_pos.row != to_pos.row and from_pos.col != to_pos.col:
         return False
     if board is None:
@@ -29,7 +29,7 @@ def rook_move_strategy(from_pos, to_pos, board=None) -> bool:
     return _path_is_clear(from_pos, to_pos, board)
 
 
-def bishop_strategy(from_pos, to_pos, board=None) -> bool:
+def bishop_strategy(from_pos, to_pos, board=None, piece=None) -> bool:
     delta_row = abs(from_pos.row - to_pos.row)
     delta_col = abs(from_pos.col - to_pos.col)
     if delta_row != delta_col:
@@ -39,19 +39,45 @@ def bishop_strategy(from_pos, to_pos, board=None) -> bool:
     return _path_is_clear(from_pos, to_pos, board)
 
 
-def queen_strategy(from_pos, to_pos, board=None) -> bool:
+def queen_strategy(from_pos, to_pos, board=None, piece=None) -> bool:
     return rook_move_strategy(from_pos, to_pos, board) or bishop_strategy(from_pos, to_pos, board)
 
 
-def knight_strategy(from_pos, to_pos, board=None) -> bool:
+def knight_strategy(from_pos, to_pos, board=None, piece=None) -> bool:
     # פרש קופץ מעל כלים — אין בדיקת מסלול
     delta_row = abs(from_pos.row - to_pos.row)
     delta_col = abs(from_pos.col - to_pos.col)
     return (delta_row == 2 and delta_col == 1) or (delta_row == 1 and delta_col == 2)
 
 
-def pawn_strategy(from_pos, to_pos, board=None) -> bool:
-    # רגלי משמש כחוסם סטטי בלבד — לא זז בעצמו
+def pawn_strategy(from_pos, to_pos, board=None, piece=None) -> bool:
+    """
+    חוקי תנועה מלאים לרגלי:
+    - לבן זז למעלה (row -= 1), שחור זז למטה (row += 1)
+    - קדימה (אותה עמודה): חוקי רק אם היעד ריק
+    - אלכסון (עמודה שכנה): חוקי רק אם ביעד יש כלי אויב
+    """
+    if piece is None or board is None:
+        return False
+
+    direction = -1 if piece.color == "w" else 1
+    row_diff = to_pos.row - from_pos.row
+    col_diff = abs(to_pos.col - from_pos.col)
+
+    # חייב לזוז בדיוק שורה אחת בכיוון הנכון
+    if row_diff != direction:
+        return False
+
+    target = board.get_piece(to_pos.row, to_pos.col)
+
+    if col_diff == 0:
+        # תנועה קדימה — חוקית רק אם היעד ריק
+        return target == "."
+
+    if col_diff == 1:
+        # אכילה באלכסון — חוקית רק אם יש כלי אויב ביעד
+        return (target != "." and hasattr(target, 'color') and target.color != piece.color)
+
     return False
 
 

@@ -10,8 +10,7 @@ from entities.position import Position
 class TestPiece(unittest.TestCase):
     def test_piece_initialization_and_forwarding(self):
         """is_legal_shape מעביר את הקריאה לאסטרטגיה ומחזיר את תוצאתה."""
-        # ה-dummy_strategy מקבל board=None כברירת מחדל — תאים לחתימה המעודכנת
-        dummy_strategy = lambda from_pos, to_pos, board=None: True
+        dummy_strategy = lambda from_pos, to_pos, board=None, piece=None: True
 
         piece = Piece(color="w", role="K", move_strategy=dummy_strategy)
         self.assertEqual(piece.color, "w")
@@ -25,7 +24,7 @@ class TestPiece(unittest.TestCase):
         """is_legal_shape מעביר את board לאסטרטגיה כשמסופק."""
         received = {}
 
-        def capturing_strategy(from_pos, to_pos, board=None):
+        def capturing_strategy(from_pos, to_pos, board=None, piece=None):
             received['board'] = board
             return True
 
@@ -37,7 +36,7 @@ class TestPiece(unittest.TestCase):
 
     def test_piece_without_board_still_works(self):
         """קריאה ל-is_legal_shape ללא board לא קורסת."""
-        dummy_strategy = lambda from_pos, to_pos, board=None: False
+        dummy_strategy = lambda from_pos, to_pos, board=None, piece=None: False
         piece = Piece(color="w", role="N", move_strategy=dummy_strategy)
         self.assertFalse(piece.is_legal_shape(Position(0, 0), Position(1, 2)))
 

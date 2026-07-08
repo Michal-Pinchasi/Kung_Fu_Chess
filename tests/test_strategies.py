@@ -149,16 +149,121 @@ class TestKnightStrategy(unittest.TestCase):
 
 
 class TestPawnStrategy(unittest.TestCase):
-    def test_pawn_always_returns_false(self):
-        """רגלי לא נע — האסטרטגיה שלו מחזירה תמיד False."""
-        p1 = Position(1, 1)
-        p2 = Position(2, 1)
-        self.assertFalse(pawn_strategy(p1, p2))
-        self.assertFalse(pawn_strategy(p1, p2, board=None))
+    """טסטים מלאים לחוקי תנועה ואכילה של הרגלי — איטרציה 5."""
+
+    def _make_pawn(self, color):
+        return Piece(color, "P", STRATEGIES_MAP["P"])
+
+    def _make_enemy(self, color):
+        """מחזיר כלי של הצבע הנגדי."""
+        enemy_color = "b" if color == "w" else "w"
+        return Piece(enemy_color, "K", STRATEGIES_MAP["K"])
+
+    # --- תנועה קדימה חוקית ---
+
+    def test_white_pawn_moves_forward_to_empty(self):
+        """רגלי לבן זז שורה אחת למעלה לתוך משבצת ריקה."""
+        board = Board(width=4, height=4)
+        pawn = self._make_pawn("w")
+        board.set_piece(2, 1, pawn)
+        self.assertTrue(pawn_strategy(Position(2, 1), Position(1, 1), board, piece=pawn))
+
+    def test_black_pawn_moves_forward_to_empty(self):
+        """רגלי שחור זז שורה אחת למטה לתוך משבצת ריקה."""
+        board = Board(width=4, height=4)
+        pawn = self._make_pawn("b")
+        board.set_piece(1, 1, pawn)
+        self.assertTrue(pawn_strategy(Position(1, 1), Position(2, 1), board, piece=pawn))
+
+    # --- חסימה קדימה ---
+
+    def test_white_pawn_blocked_by_friendly_ahead(self):
+        """תנועה קדימה נחסמת כשיש כלי ידידותי ישירות מול הרגלי."""
+        board = Board(width=4, height=4)
+        pawn = self._make_pawn("w")
+        board.set_piece(2, 1, pawn)
+        board.set_piece(1, 1, Piece("w", "K", STRATEGIES_MAP["K"]))
+        self.assertFalse(pawn_strategy(Position(2, 1), Position(1, 1), board, piece=pawn))
+
+    def test_white_pawn_blocked_by_enemy_ahead(self):
+        """תנועה קדימה נחסמת גם כשיש כלי אויב ישירות מול הרגלי (אי-אפשר לאכול ישר)."""
+        board = Board(width=4, height=4)
+        pawn = self._make_pawn("w")
+        board.set_piece(2, 1, pawn)
+        board.set_piece(1, 1, Piece("b", "R", STRATEGIES_MAP["R"]))
+        self.assertFalse(pawn_strategy(Position(2, 1), Position(1, 1), board, piece=pawn))
+
+    # --- איסור תנועה כפולה ---
+
+    def test_white_pawn_cannot_move_two_squares(self):
+        """רגלי לבן לא יכול לזוז שתי משבצות קדימה."""
+        board = Board(width=4, height=5)
+        pawn = self._make_pawn("w")
+        board.set_piece(3, 1, pawn)
+        self.assertFalse(pawn_strategy(Position(3, 1), Position(1, 1), board, piece=pawn))
+
+    def test_black_pawn_cannot_move_two_squares(self):
+        """רגלי שחור לא יכול לזוז שתי משבצות קדימה."""
+        board = Board(width=4, height=5)
+        pawn = self._make_pawn("b")
+        board.set_piece(1, 1, pawn)
+        self.assertFalse(pawn_strategy(Position(1, 1), Position(3, 1), board, piece=pawn))
+
+    # --- איסור תנועה לאחור ---
+
+    def test_white_pawn_cannot_move_backward(self):
+        """רגלי לבן לא יכול לזוז אחורה (שורה גדלה)."""
+        board = Board(width=4, height=4)
+        pawn = self._make_pawn("w")
+        board.set_piece(1, 1, pawn)
+        self.assertFalse(pawn_strategy(Position(1, 1), Position(2, 1), board, piece=pawn))
+
+    # --- אכילה באלכסון ---
+
+    def test_white_pawn_captures_diagonally(self):
+        """רגלי לבן אוכל כלי אויב באלכסון קדימה."""
+        board = Board(width=4, height=4)
+        pawn = self._make_pawn("w")
+        enemy = self._make_enemy("w")
+        board.set_piece(2, 1, pawn)
+        board.set_piece(1, 2, enemy)
+        self.assertTrue(pawn_strategy(Position(2, 1), Position(1, 2), board, piece=pawn))
+
+    def test_black_pawn_captures_diagonally(self):
+        """רגלי שחור אוכל כלי אויב באלכסון קדימה."""
+        board = Board(width=4, height=4)
+        pawn = self._make_pawn("b")
+        enemy = self._make_enemy("b")
+        board.set_piece(1, 1, pawn)
+        board.set_piece(2, 2, enemy)
+        self.assertTrue(pawn_strategy(Position(1, 1), Position(2, 2), board, piece=pawn))
+
+    def test_pawn_cannot_capture_empty_diagonal(self):
+        """אלכסון ריק — אסור לרגלי לזוז לשם."""
+        board = Board(width=4, height=4)
+        pawn = self._make_pawn("w")
+        board.set_piece(2, 1, pawn)
+        # (1,2) ריק
+        self.assertFalse(pawn_strategy(Position(2, 1), Position(1, 2), board, piece=pawn))
+
+    def test_pawn_cannot_capture_friendly_diagonal(self):
+        """אלכסון עם כלי ידידותי — אסור לרגלי לזוז לשם."""
+        board = Board(width=4, height=4)
+        pawn = self._make_pawn("w")
+        friendly = Piece("w", "K", STRATEGIES_MAP["K"])
+        board.set_piece(2, 1, pawn)
+        board.set_piece(1, 2, friendly)
+        self.assertFalse(pawn_strategy(Position(2, 1), Position(1, 2), board, piece=pawn))
+
+    # --- תאימות וסיווג ---
 
     def test_pawn_in_strategies_map(self):
         self.assertIn("P", STRATEGIES_MAP)
         self.assertEqual(STRATEGIES_MAP["P"], pawn_strategy)
+
+    def test_pawn_returns_false_without_board_or_piece(self):
+        """ללא board וללא piece — מחזיר False בלי קריסה."""
+        self.assertFalse(pawn_strategy(Position(2, 1), Position(1, 1)))
 
 
 if __name__ == "__main__":

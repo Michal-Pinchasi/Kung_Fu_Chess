@@ -154,5 +154,106 @@ class TestEngineBlocker(unittest.TestCase):
         self.assertEqual(len(engine.active_moves), 1)
 
 
+class TestEnginePawn(unittest.TestCase):
+    """טסטי אינטגרציה לרגלי דרך ה-engine — איטרציה 5."""
+
+    def _make_board(self):
+        return Board(width=4, height=4)
+
+    # --- תנועה קדימה ---
+
+    def test_white_pawn_forward_legal(self):
+        """רגלי לבן זז שורה אחת קדימה לתוך ריק — active_move נוצר."""
+        board = self._make_board()
+        pawn = Piece("w", "P", STRATEGIES_MAP["P"])
+        board.set_piece(2, 1, pawn)
+        engine = GameEngine(board)
+
+        engine.handle_click(150, 250)  # בחירת רגלי ב-(2,1)
+        engine.handle_click(150, 150)  # יעד (1,1) — ריק, חוקי
+
+        self.assertEqual(board.get_piece(2, 1), ".")
+        self.assertEqual(len(engine.active_moves), 1)
+
+    def test_white_pawn_forward_blocked(self):
+        """רגלי לבן מנסה לזוז לתוך משבצת תפוסה קדימה — לא חוקי."""
+        board = self._make_board()
+        pawn = Piece("w", "P", STRATEGIES_MAP["P"])
+        blocker = Piece("b", "R", STRATEGIES_MAP["R"])
+        board.set_piece(2, 1, pawn)
+        board.set_piece(1, 1, blocker)  # חוסם ישירות מול
+        engine = GameEngine(board)
+
+        engine.handle_click(150, 250)  # בחירת רגלי ב-(2,1)
+        engine.handle_click(150, 150)  # יעד (1,1) — תפוס, לא חוקי
+
+        self.assertEqual(board.get_piece(2, 1), pawn)
+        self.assertEqual(len(engine.active_moves), 0)
+        self.assertIsNone(engine.selected_pos)
+
+    def test_black_pawn_forward_legal(self):
+        """רגלי שחור זז שורה אחת קדימה (למטה) — active_move נוצר."""
+        board = self._make_board()
+        pawn = Piece("b", "P", STRATEGIES_MAP["P"])
+        board.set_piece(1, 1, pawn)
+        engine = GameEngine(board)
+
+        engine.handle_click(150, 150)  # בחירת רגלי ב-(1,1)
+        engine.handle_click(150, 250)  # יעד (2,1) — ריק, חוקי
+
+        self.assertEqual(board.get_piece(1, 1), ".")
+        self.assertEqual(len(engine.active_moves), 1)
+
+    # --- אכילה באלכסון ---
+
+    def test_white_pawn_diagonal_capture(self):
+        """רגלי לבן אוכל כלי אויב באלכסון — active_move נוצר."""
+        board = self._make_board()
+        pawn = Piece("w", "P", STRATEGIES_MAP["P"])
+        enemy = Piece("b", "K", STRATEGIES_MAP["K"])
+        board.set_piece(2, 1, pawn)
+        board.set_piece(1, 2, enemy)
+        engine = GameEngine(board)
+
+        engine.handle_click(150, 250)  # בחירת רגלי ב-(2,1)
+        engine.handle_click(250, 150)  # יעד (1,2) — אויב, חוקי
+
+        self.assertEqual(board.get_piece(2, 1), ".")
+        self.assertEqual(len(engine.active_moves), 1)
+
+    def test_white_pawn_diagonal_capture_advance_time(self):
+        """advance_time: הרגלי מגיע ליעד, האויב נמחק."""
+        board = self._make_board()
+        pawn = Piece("w", "P", STRATEGIES_MAP["P"])
+        enemy = Piece("b", "K", STRATEGIES_MAP["K"])
+        board.set_piece(2, 1, pawn)
+        board.set_piece(1, 2, enemy)
+        engine = GameEngine(board)
+
+        engine.handle_click(150, 250)
+        engine.handle_click(250, 150)
+        engine.advance_time(1000)
+
+        result = board.get_piece(1, 2)
+        self.assertIsInstance(result, Piece)
+        self.assertEqual(result.color, "w")
+        self.assertEqual(len(engine.active_moves), 0)
+
+    def test_white_pawn_diagonal_empty_is_illegal(self):
+        """רגלי לבן מנסה לזוז לאלכסון ריק — לא חוקי."""
+        board = self._make_board()
+        pawn = Piece("w", "P", STRATEGIES_MAP["P"])
+        board.set_piece(2, 1, pawn)
+        # (1,2) ריק
+        engine = GameEngine(board)
+
+        engine.handle_click(150, 250)  # בחירת רגלי ב-(2,1)
+        engine.handle_click(250, 150)  # יעד (1,2) — ריק, לא חוקי
+
+        self.assertEqual(board.get_piece(2, 1), pawn)
+        self.assertEqual(len(engine.active_moves), 0)
+        self.assertIsNone(engine.selected_pos)
+
+
 if __name__ == "__main__":
     unittest.main()

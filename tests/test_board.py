@@ -24,13 +24,13 @@ class TestBoard(unittest.TestCase):
     def test_get_and_set_piece_valid(self):
         board = Board(width=3, height=3)
         # lambda מקבל board=None בהתאם לחתימה המעודכנת
-        mock_piece = Piece("w", "K", lambda f, t, board=None: True)
+        mock_piece = Piece("w", "K", lambda f, t, board=None, piece=None: True)
         board.set_piece(1, 2, mock_piece)
         self.assertEqual(board.get_piece(1, 2), mock_piece)
 
     def test_get_and_set_piece_invalid_bounds(self):
         board = Board(width=3, height=3)
-        mock_piece = Piece("b", "Q", lambda f, t, board=None: True)
+        mock_piece = Piece("b", "Q", lambda f, t, board=None, piece=None: True)
         board.set_piece(5, 5, mock_piece)
         self.assertEqual(board.get_piece(5, 5), ".")
 

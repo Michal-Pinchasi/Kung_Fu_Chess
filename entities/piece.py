@@ -6,4 +6,4 @@ class Piece:
 
     def is_legal_shape(self, from_pos, to_pos, board=None) -> bool:
         """קריאה לאסטרטגיה שמוצמדת לכלי כדי לבדוק גיאומטריה ומסלול"""
-        return self._move_strategy(from_pos, to_pos, board)
+        return self._move_strategy(from_pos, to_pos, board, piece=self)
