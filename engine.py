@@ -1,5 +1,5 @@
-from board import Board
-from position import Position
+from entities.board import Board
+from entities.position import Position
 from serializer import TextBoardSerializer
 
 class ActiveMove:

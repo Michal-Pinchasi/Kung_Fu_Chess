@@ -1,5 +1,5 @@
 import sys
-from board import Board
+from entities.board import Board
 
 class TextBoardSerializer:
     VALID_PIECES = {"K", "Q", "R", "B", "N", "P"}

@@ -1,5 +1,5 @@
 import unittest
-from position import Position
+from entities.position import Position
 
 class TestPosition(unittest.TestCase):
     def test_position_initialization(self):

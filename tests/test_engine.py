@@ -1,7 +1,7 @@
 import unittest
-from board import Board
+from entities.board import Board
 from engine import GameEngine
-from position import Position
+from entities.position import Position
 
 class TestGameEngine(unittest.TestCase):
     def setUp(self):

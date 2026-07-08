@@ -1,5 +1,5 @@
 import unittest
-from board import Board
+from entities.board import Board
 
 class TestBoard(unittest.TestCase):
     def test_board_initialization(self):

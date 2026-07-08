@@ -1,6 +1,6 @@
 import unittest
 from serializer import TextBoardSerializer
-from board import Board
+from entities.board import Board
 
 class TestTextBoardSerializer(unittest.TestCase):
     def test_validate_token_valid(self):
