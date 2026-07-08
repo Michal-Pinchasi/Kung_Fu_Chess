@@ -2,17 +2,15 @@ import sys
 from board import Board
 
 class TextBoardSerializer:
-    VALID_PIECES = {"K", "Q", "R", "B", "N", "P"}  # מלך, מלכה, צריח, רץ, פרש, רגלי
+    VALID_PIECES = {"K", "Q", "R", "B", "N", "P"}
     VALID_COLORS = {"w", "b"}
 
     @staticmethod
     def validate_token(token: str):
-        """בודק אם הטוקן הוא נקודה או כלי חוקי (למשל wK)"""
         if token == ".":
             return True
         if len(token) == 2 and token[0] in TextBoardSerializer.VALID_COLORS and token[1] in TextBoardSerializer.VALID_PIECES:
             return True
-        
         print("ERROR UNKNOWN_TOKEN")
         sys.exit(0)
 
@@ -56,7 +54,6 @@ class TextBoardSerializer:
 
     @staticmethod
     def serialize(board: Board) -> str:
-        """ממיר את הלוח חזרה לפורמט קנוני מדויק"""
         result_rows = []
         for row in board.grid:
             result_rows.append(" ".join(row))
