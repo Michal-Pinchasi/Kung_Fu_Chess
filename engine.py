@@ -28,7 +28,7 @@ class GameEngine:
                 self.advance_time(int(parts[1]))
         elif cmd_text == "print board":
             print(TextBoardSerializer.serialize(self.board))
-
+            
     def handle_click(self, x: int, y: int):
         col = x // self.CELL_SIZE_PIXELS
         row = y // self.CELL_SIZE_PIXELS
@@ -46,17 +46,14 @@ class GameEngine:
 
         selected_piece = self.board.get_piece(self.selected_pos.row, self.selected_pos.col)
         
-        # בדיקת צבע - אם לחצנו על כלי אחר באותו צבע, נחליף את הבחירה
-        if clicked_piece != "." and clicked_piece.color == selected_piece.color:
+        # ההגנה החשובה: מוודאים שזה אובייקט ולא מחרוזת נקודה "." לפני שבודקים color
+        if clicked_piece != "." and hasattr(clicked_piece, 'color') and hasattr(selected_piece, 'color') and clicked_piece.color == selected_piece.color:
             self.selected_pos = current_click_pos
         else:
-            # --- ההגנה החדשה של איטרציה 3! ---
-            # נשאל את הכלי האם המהלך חוקי מבחינת הצורה שלו
-            if selected_piece.is_legal_shape(self.selected_pos, current_click_pos):
-                self.request_move(self.selected_pos, current_click_pos, selected_piece)
-            
-            # אם המהלך לא חוקי, אנחנו פשוט מאפסים את הבחירה ומתעלמים
-            self.selected_pos = None 
+            if selected_piece != "." and hasattr(selected_piece, 'is_legal_shape'):
+                if selected_piece.is_legal_shape(self.selected_pos, current_click_pos):
+                    self.request_move(self.selected_pos, current_click_pos, selected_piece)
+            self.selected_pos = None
 
     def request_move(self, from_pos: Position, to_pos: Position, piece):
         if from_pos == to_pos:
