@@ -1,6 +1,6 @@
 import sys
 from serializer import TextBoardSerializer
-from engine import GameEngine
+from Kung_Fu_Chess.engin.game_engine import GameEngine
 
 def main():
     # 1. קריאת כל הקלט

@@ -3,10 +3,10 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from entities.board import Board
-from entities.piece import Piece
-from entities.position import Position
-from entities.strategies import (
+from model.board import Board
+from model.piece import Piece
+from model.position import Position
+from model.strategies import (
     king_move_strategy, rook_move_strategy, bishop_strategy,
     queen_strategy, knight_strategy, pawn_strategy, STRATEGIES_MAP
 )

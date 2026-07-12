@@ -1,7 +1,7 @@
 from model.position import Position
 from model.game_state import GameState, GameSnapshot, MoveResult
-from rules.rule_engine import RuleEngine
-from realtime.real_time_arbiter import RealTimeArbiter
+from Kung_Fu_Chess.rules.rule_engine import RuleEngine
+from Kung_Fu_Chess.realtime.real_time_arbiter import RealTimeArbiter
 
 class GameEngine:
     """

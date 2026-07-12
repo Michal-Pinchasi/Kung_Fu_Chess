@@ -6,8 +6,8 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from serializer import TextBoardSerializer
-from entities.board import Board
-from entities.piece import Piece
+from model.board import Board
+from model.piece import Piece
 
 class TestTextBoardSerializer(unittest.TestCase):
     def test_validate_token_valid(self):

@@ -8,7 +8,7 @@ from model.board import Board
 from model.position import Position
 from model.piece import Piece
 from model.constants import PieceColor, PieceKind
-from realtime.real_time_arbiter import RealTimeArbiter
+from Kung_Fu_Chess.realtime.real_time_arbiter import RealTimeArbiter
 
 class TestRealTimeArbiter(unittest.TestCase):
 

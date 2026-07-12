@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from model.position import Position
 from model.piece import Piece
 from model.constants import PieceColor, PieceKind
-from realtime.motion import Motion
+from Kung_Fu_Chess.realtime.motion import Motion
 
 class TestMotionLifecycle(unittest.TestCase):
     def test_motion_lifecycle_ticks(self):

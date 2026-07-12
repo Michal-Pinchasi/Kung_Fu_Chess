@@ -1,7 +1,7 @@
 import sys
-from entities.board import Board
-from entities.piece import Piece
-from entities.strategies import STRATEGIES_MAP
+from model.board import Board
+from model.piece import Piece
+from model.strategies import STRATEGIES_MAP
 
 class TextBoardSerializer:
     VALID_PIECES = {"K", "Q", "R", "B", "N", "P"}

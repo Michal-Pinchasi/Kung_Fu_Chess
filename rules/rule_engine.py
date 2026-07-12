@@ -1,5 +1,5 @@
 from model.position import Position
-from rules.piece_rules import PieceRules
+from Kung_Fu_Chess.rules.piece_rules import PieceRules
 
 class MoveValidation:
     """אובייקט תשובה גמיש המכיל את תוצאת האימות וסיבת השגיאה במידה ונכשל"""

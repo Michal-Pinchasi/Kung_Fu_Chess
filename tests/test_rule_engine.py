@@ -8,7 +8,7 @@ from model.board import Board
 from model.position import Position
 from model.piece import Piece
 from model.constants import PieceColor, PieceKind
-from rules.rule_engine import RuleEngine
+from Kung_Fu_Chess.rules.rule_engine import RuleEngine
 
 class TestRuleEngine(unittest.TestCase):
 

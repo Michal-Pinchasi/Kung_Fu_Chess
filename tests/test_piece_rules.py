@@ -9,7 +9,7 @@ from model.board import Board
 from model.position import Position
 from model.piece import Piece
 from model.constants import PieceColor, PieceKind
-from rules.piece_rules import PieceRules
+from Kung_Fu_Chess.rules.piece_rules import PieceRules
 
 class TestPieceRules(unittest.TestCase):
 
