@@ -1,40 +1,56 @@
 from model.position import Position
-from Kung_Fu_Chess.rules.piece_rules import PieceRules
+from model.constants import PieceKind, PieceColor
+from rules.piece_rules import PieceRules
 
 class MoveValidation:
-    """אובייקט תשובה גמיש המכיל את תוצאת האימות וסיבת השגיאה במידה ונכשל"""
+    """אובייקט תשובה גמיש המכיל את תוצאת האימות וסיבת השגיאה במידה ונכשל[cite: 2]"""
     def __init__(self, is_valid: bool, reason: str = "ok"):
-        self.is_valid = is_valid  # True/False האם המהלך מאושר לביצוע
-        self.reason = reason      # סיבת הסטטוס: "ok", "empty_source", "friendly_destination", "illegal_piece_move"
-
+        self.is_valid = is_valid  # True/False האם המהלך מאושר לביצוע[cite: 2]
+        self.reason = reason      # סיבת הסטטוס[cite: 2]
 
 class RuleEngine:
-    """מנוע החוקים הראשי של המשחק (לקריאה בלבד, אינו משנה את הלוח)"""
+    """מנוע החוקים הראשי של המשחק (לקריאה בלבד, אינו משנה את הלוח)[cite: 2]"""
 
     @staticmethod
     def validate_move(board, source: Position, destination: Position) -> MoveValidation:
-        """
-        מבצע אימות מלא למהלך מבוקש ומחזיר אובייקט MoveValidation.
-        פונקציה זו אינה משנה את מצב הלוח.
-        """
-        # 1. בדיקה שיש בכלל כלי במשבצת המקור
+        """מבצע אימות מלא למהלך מבוקש ומחזיר אובייקט MoveValidation[cite: 2]"""
         piece = board.get_piece(source.row, source.col)
         if piece == ".":
             return MoveValidation(is_valid=False, reason="empty_source")
 
-        # 2. בדיקה האם היעד נמצא בתוך גבולות הלוח
         if not board.is_valid_position(destination.row, destination.col):
             return MoveValidation(is_valid=False, reason="outside_board")
 
-        # 3. בדיקה האם היעד מכיל כלי ידידותי (חסימת אכילה עצמית)
         target = board.get_piece(destination.row, destination.col)
         if target != "." and target.color == piece.color:
             return MoveValidation(is_valid=False, reason="friendly_destination")
 
-        # 4. בדיקה האם המהלך חוקי לפי החוקים הגיאומטריים של סוג הכלי הספציפי
         legal_destinations = PieceRules.legal_destinations(board, piece, source)
         if destination not in legal_destinations:
             return MoveValidation(is_valid=False, reason="illegal_piece_move")
 
-        # אם המהלך עבר את כל סינוני שומרי הסף - הוא חוקי ומאושר!
         return MoveValidation(is_valid=True, reason="ok")
+
+    @staticmethod
+    def get_game_winner(board) -> str:
+        """
+        סורק את הלוח ומחזיר מי המנצח על בסיס קיום המלכים.
+        מחזיר "BLACK", "WHITE" או None במידה והמשחק נמשך[cite: 4].
+        """
+        white_king = False
+        black_king = False
+        
+        for row in range(board.height):
+            for col in range(board.width):
+                piece = board.get_piece(row, col)
+                if piece != "." and piece.kind == PieceKind.KING:
+                    if piece.color == PieceColor.WHITE:
+                        white_king = True
+                    else:
+                        black_king = True
+                        
+        if not white_king:
+            return "BLACK"
+        if not black_king:
+            return "WHITE"
+        return None

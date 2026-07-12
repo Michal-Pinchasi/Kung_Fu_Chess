@@ -12,7 +12,7 @@ class RealTimeArbiter:
         self.active_motions = [] 
 
     def has_motion_on_path(self, source: Position, destination: Position) -> bool:
-        """בדיקה גיאומטרית יבשה: האם משבצות המקור או היעד תפוסות כרגע בתנועה באוויר[cite: 12]"""
+        """בדיקה גיאומטרית יבשה: האם משבצות המקור או היעד תפוסות כרגע בתנועה באוויר"""
         for motion in self.active_motions:
             if (motion.source == source or 
                 motion.destination == destination or 
@@ -21,17 +21,16 @@ class RealTimeArbiter:
                 return True
         return False
 
-    def start_motion(self, piece, source: Position, destination: Position, duration_ticks: int):
-        """רישום מכני של תנועה חדשה באוויר[cite: 12]"""
+    def start_motion(self, piece, source: Position, destination: Position, duration_ticks: int = 10):
+        """רישום מכני של תנועה חדשה באוויר"""
         motion = Motion(piece, source, destination, duration_ticks)
         self.active_motions.append(motion)
 
     def advance_time(self, ms: int):
         """
         מריץ את הזמן המדומה קדימה.
-        כשתנועה מסתיימת - היא פשוט מבוצעת פיזית על הלוח, בלי בדיקות חוקים או כלים[cite: 12].
+        כשתנועה מסתיימת - היא מבוצעת פיזית על הלוח ללא בדיקות סיום לוגיות.
         """
-        # המרה קבועה של מילישניות לפעימות (למשל, 100ms = 1 Tick)
         ticks_to_run = ms // 100
         
         for _ in range(ticks_to_run):
@@ -39,8 +38,5 @@ class RealTimeArbiter:
                 motion.tick()
                 
                 if motion.is_finished():
-                    # ביצוע פיזי עיוור וטהור על גבי הלוח[cite: 12]
                     self.board.move_piece(motion.source, motion.destination)
-                    
-                    # הסרה מכנית מרשימת התנועות הפעילות[cite: 12]
                     self.active_motions.remove(motion)
