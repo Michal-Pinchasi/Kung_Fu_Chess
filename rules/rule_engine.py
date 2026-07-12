@@ -42,6 +42,17 @@ class RuleEngine:
         return ValidationResult(True, "ok")
 
     @staticmethod
+    def check_king_capture(captured_pieces) -> bool:
+        """
+        מקבלת רשימת כלים שנאכלו ומחזירה True אם אחד מהם הוא מלך.
+        בדיקה זו משאירה את ההחלטה על משמעות הכלים בשכבת החוקים.
+        """
+        for piece in captured_pieces:
+            if piece != "." and piece.kind == PieceKind.KING:
+                return True
+        return False
+
+    @staticmethod
     def get_game_winner(board) -> str or None:
         """
         סורק את הלוח ומזהה האם אחד המלכים חסר (חוסל).

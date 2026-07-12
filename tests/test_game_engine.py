@@ -35,8 +35,15 @@ def test_game_engine_execute_command_parsing():
     board.add_piece(0, 0, w_rook)
     engine = GameEngine(board)
     
-    # בדיקת פענוח הפקודות הטקסטואליות
+    # בדיקת פענוח פקודת התנועה
     engine.execute_command("move 0,0 to 0,5")
-    assert board.get_piece(0, 0) == "." 
     
-    engine.execute_command("wait 500")
+    # חוק זמן אמת: מיד לאחר הפקודה ולפני ההמתנה, הכלי עדיין חייב להיות במקור!
+    assert board.get_piece(0, 0) == w_rook
+    
+    # המרחק הוא 5 משבצות. כל משבצת לוקחת 1000ms, לכן נמתין 5000ms כדי שהכלי יגיע ליעד
+    engine.execute_command("wait 5000")
+    
+    # כעת, לאחר שהזמן התקדם והכלי הגיע, משבצת המקור התרוקנה והיעד התמלא
+    assert board.get_piece(0, 0) == "." or board.get_piece(0, 0) is None
+    assert board.get_piece(0, 5) == w_rook
