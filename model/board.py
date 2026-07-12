@@ -29,7 +29,6 @@ class Board:
             self.grid[row][col] = "."
 
     def move_piece(self, source: Position, destination: Position):
-        """הזזת כלי ועדכון מיקומו ומצבו בנחיתה הפיזית[cite: 1, 4]"""
         if not self.is_valid_position(source.row, source.col) or not self.is_valid_position(destination.row, destination.col):
             return
 
@@ -42,14 +41,9 @@ class Board:
         
         if hasattr(piece, 'cell'):
             piece.cell = destination
-            
-        # עדכון מצב הכלי חזרה למנוחה עם נחיתתו[cite: 4]
-        if hasattr(piece, 'state'):
-            piece.state = "idle"
+
     def set_piece(self, row: int, col: int, piece):
-        """מציב כלי ישירות במשבצת (משמש לנחיתה מהאוויר או עדכון ישיר)"""
         if self.is_valid_position(row, col):
             self.grid[row][col] = piece
             if piece is not None and piece != ".":
                 piece.cell = Position(row, col)
-                piece.state = "idle"

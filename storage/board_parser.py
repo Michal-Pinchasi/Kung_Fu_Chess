@@ -1,6 +1,6 @@
-from Kung_Fu_Chess.model.board import Board
-from Kung_Fu_Chess.model.piece import Piece
-from Kung_Fu_Chess.model.constants import PieceKind, PieceColor
+from model.board import Board
+from model.piece import Piece
+from model.constants import PieceKind, PieceColor
 
 class BoardParser:
     @staticmethod
@@ -32,7 +32,6 @@ class BoardParser:
                     
                 color_char, kind_char = token[0], token[1]
                 
-                # יצירת ה-Enum ישירות מתוך הערך הטקסטואלי שלו ב-Constants!
                 try:
                     color = PieceColor(color_char)
                     kind = PieceKind(kind_char)

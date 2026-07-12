@@ -1,6 +1,6 @@
 from model.position import Position
 from model.game_state import GameState
-from rules.rule_engine import RuleEngine, ValidationResult
+from rules.rule_engine import RuleEngine
 from realtime.real_time_arbiter import RealTimeArbiter
 
 class ExecuteResult:
@@ -11,7 +11,6 @@ class ExecuteResult:
 class GameEngine:
     def __init__(self, board):
         self.board = board
-        # תיקון חוסר הסינכרון: העברת הלוח לאתחול ה-GameState
         self.game_state = GameState(board)
         self.arbiter = RealTimeArbiter(board)
 
@@ -27,23 +26,14 @@ class GameEngine:
             return ExecuteResult(False, "motion_in_progress")
 
         piece = self.board.get_piece(source.row, source.col)
-        piece.state = "moving"
-
-        # הסרת הכלי ממשבצת המקור בלוח - הוא כעת באחריות הבורר באוויר!
+        
         self.board.remove_piece(source.row, source.col)
-
         self.arbiter.start_motion(piece, source, destination, duration_ticks=10)
+        
         return ExecuteResult(True, "ok")
     
     def wait(self, ms: int):
-        """
-        מריץ את שעון המשחק קדימה במספר מילישניות מסוים.
-        לאחר קידום הזמן והנחתת הכלים מהאוויר, המנוע מעדכן את מצב המשחק הלוגי.
-        """
-        # 1. הרצת הזמן המכני בבורר (הורדת טיקים והנחתת כלים שסיימו)
         self.arbiter.advance_time(ms)
-
-        # 2. בדיקה לוגית מול מנוע החוקים: האם אחד המלכים חוסל בעקבות הנחיתות?
         winner = RuleEngine.get_game_winner(self.board)
         
         if winner is not None:
@@ -51,9 +41,6 @@ class GameEngine:
             self.game_state.winner = winner
 
     def execute_command(self, command_str: str):
-        """
-        מפרש פקודת טקסט מתוך הלוח ומריץ אותה (למשל: "move 0,0 to 0,5" או "wait 500").
-        """
         parts = command_str.strip().split()
         if not parts:
             return
@@ -64,10 +51,8 @@ class GameEngine:
             try:
                 src_parts = parts[1].split(",")
                 dst_parts = parts[3].split(",")
-                
                 src = Position(int(src_parts[0]), int(src_parts[1]))
                 dst = Position(int(dst_parts[0]), int(dst_parts[1]))
-                
                 self.request_move(src, dst)
             except (IndexError, ValueError):
                 pass

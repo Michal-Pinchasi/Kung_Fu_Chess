@@ -1,4 +1,4 @@
-from Kung_Fu_Chess.model.board import Board
+from model.board import Board
 
 class BoardPrinter:
     @staticmethod
@@ -12,7 +12,6 @@ class BoardPrinter:
                 if piece == ".":
                     row_tokens.append(".")
                 else:
-                    # שימוש ב-.value של ה-Enum ישירות מתוך ה-Constants!
                     color_char = piece.color.value
                     kind_char = piece.kind.value
                     row_tokens.append(f"{color_char}{kind_char}")

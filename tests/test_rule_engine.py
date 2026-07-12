@@ -13,27 +13,32 @@ def test_validate_move_all_branches():
     board.add_piece(4, 4, white_rook)
     board.add_piece(4, 6, friendly_pawn)
     
-    # 1. בדיקת משבצת מקור ריקה
+    # 1. בדיקת משבצת מקור מחוץ ללוח
+    res_out_src = RuleEngine.validate_move(board, Position(-1, 0), Position(0, 1))
+    assert res_out_src.is_valid is False
+    assert res_out_src.reason == "outside_board"
+    
+    # 2. בדיקת משבצת מקור ריקה
     res1 = RuleEngine.validate_move(board, Position(0, 0), Position(0, 1))
     assert res1.is_valid is False
     assert res1.reason == "empty_source"
     
-    # 2. בדיקת יעד מחוץ ללוח
+    # 3. בדיקת יעד מחוץ ללוח
     res2 = RuleEngine.validate_move(board, Position(4, 4), Position(8, 4))
     assert res2.is_valid is False
     assert res2.reason == "outside_board"
     
-    # 3. בדיקת יעד עם כלי ידידותי
+    # 4. בדיקת יעד עם כלי ידידותי
     res3 = RuleEngine.validate_move(board, Position(4, 4), Position(4, 6))
     assert res3.is_valid is False
     assert res3.reason == "friendly_destination"
     
-    # 4. בדיקת מהלך גיאומטרית לא חוקי
+    # 5. בדיקת מהלך גיאומטרית לא חוקי
     res4 = RuleEngine.validate_move(board, Position(4, 4), Position(5, 5))
     assert res4.is_valid is False
     assert res4.reason == "illegal_piece_move"
     
-    # 5. מהלך תקין לחלוטין
+    # 6. מהלך תקין לחלוטין
     res5 = RuleEngine.validate_move(board, Position(4, 4), Position(4, 5))
     assert res5.is_valid is True
     assert res5.reason == "ok"

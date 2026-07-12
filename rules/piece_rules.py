@@ -1,3 +1,4 @@
+from typing import Set
 from model.position import Position
 from model.constants import PieceKind, PieceColor
 
@@ -5,7 +6,7 @@ class PieceRules:
     """השער הראשי לחישוב יעדים גיאומטריים של כל הכלים (לקריאה בלבד)"""
     
     @staticmethod
-    def legal_destinations(board, piece, position: Position) -> set[Position]:
+    def legal_destinations(board, piece, position: Position) -> Set[Position]:
         """החתימה הרשמית שנדרשה בסילבוס: מחזירה קבוצת מיקומים תיאורטית"""
         # מיפוי פשוט שמנתב כל כלי למחלקת החוקים הגיאומטרית שלו
         rule_map = {
@@ -27,7 +28,7 @@ class PieceRules:
 class ChessRuleUtils:
     """כלי עזר לחישוב מהיר של מהלכים קוויים (צריח, רץ, מלכה)"""
     @staticmethod
-    def get_sliding_moves(board, position: Position, directions: list[tuple[int, int]]) -> set[Position]:
+    def get_sliding_moves(board, position: Position, directions: list) -> Set[Position]:
         moves = set()
         for dr, dc in directions:
             r, c = position.row + dr, position.col + dc
@@ -48,7 +49,7 @@ class ChessRuleUtils:
 
 class RookRules:
     @staticmethod
-    def get_moves(board, piece, position: Position) -> set[Position]:
+    def get_moves(board, piece, position: Position) -> Set[Position]:
         # צריח זז ב-4 כיוונים ישרים (למעלה, למטה, ימינה, שמאלה)
         directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
         return ChessRuleUtils.get_sliding_moves(board, position, directions)
@@ -56,7 +57,7 @@ class RookRules:
 
 class BishopRules:
     @staticmethod
-    def get_moves(board, piece, position: Position) -> set[Position]:
+    def get_moves(board, piece, position: Position) -> Set[Position]:
         # רץ זז ב-4 כיווני אלכסון
         directions = [(-1, -1), (-1, 1), (1, -1), (1, 1)]
         return ChessRuleUtils.get_sliding_moves(board, position, directions)
@@ -64,7 +65,7 @@ class BishopRules:
 
 class QueenRules:
     @staticmethod
-    def get_moves(board, piece, position: Position) -> set[Position]:
+    def get_moves(board, piece, position: Position) -> Set[Position]:
         # מלכה משלבת את כיווני הצריח והרץ ביחד
         directions = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]
         return ChessRuleUtils.get_sliding_moves(board, position, directions)
@@ -72,7 +73,7 @@ class QueenRules:
 
 class KingRules:
     @staticmethod
-    def get_moves(board, piece, position: Position) -> set[Position]:
+    def get_moves(board, piece, position: Position) -> Set[Position]:
         # מלך זז צעד אחד לכל 8 הכיוונים מסביבו
         moves = set()
         directions = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]
@@ -85,7 +86,7 @@ class KingRules:
 
 class KnightRules:
     @staticmethod
-    def get_moves(board, piece, position: Position) -> set[Position]:
+    def get_moves(board, piece, position: Position) -> Set[Position]:
         # פרש מדלג בצורת L (8 מיקומים אפשריים)
         moves = set()
         l_shapes = [(-2, -1), (-2, 1), (-1, -2), (-1, 2), (1, -2), (1, 2), (2, -1), (2, 1)]
@@ -98,7 +99,7 @@ class KnightRules:
 
 class PawnRules:
     @staticmethod
-    def get_moves(board, piece, position: Position) -> set[Position]:
+    def get_moves(board, piece, position: Position) -> Set[Position]:
         moves = set()
         # כיוון התנועה נקבע לפי צבע הרגלי (לבן עולה למעלה, שחור יורד למטה)
         direction = -1 if piece.color == PieceColor.WHITE else 1

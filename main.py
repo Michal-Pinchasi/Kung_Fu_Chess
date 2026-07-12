@@ -1,58 +1,73 @@
-from model.board import Board
-from model.piece import Piece
-from model.position import Position
-from model.constants import PieceKind, PieceColor
+import sys
+from storage.board_parser import BoardParser
+from storage.board_printer import BoardPrinter
+from engin.game_engine import GameEngine
+from input.controller import Controller
 
-class TextBoardSerializer:
-    @staticmethod
-    def parse(input_text: str) -> Board:
-        lines = input_text.strip().split("\n")
+def run_game_from_text(input_text: str):
+    lines = input_text.strip().split("\n")
+    board_lines = []
+    command_lines = []
+    
+    in_commands = False
+    for line in lines:
+        cleaned_line = line.strip()
+        if not cleaned_line:
+            continue
+        if cleaned_line.startswith("Commands:"):
+            in_commands = True
+            continue
+        if cleaned_line.startswith("Board:"):
+            continue
+            
+        if not in_commands:
+            board_lines.append(cleaned_line)
+        else:
+            command_lines.append(cleaned_line)
+
+    board_text = "\n".join(board_lines)
+    
+    # 1. טיפול בשגיאות טעינת הלוח בהתאם לדרישות האתר
+    try:
+        board = BoardParser.parse(board_text)
+    except ValueError as e:
+        err_msg = str(e)
+        if "Inconsistent row lengths" in err_msg:
+            print("ERROR ROW_WIDTH_MISMATCH")
+        elif "Unknown piece token" in err_msg or "Invalid piece token" in err_msg:
+            print("ERROR UNKNOWN_TOKEN")
+        else:
+            print("ERROR")
+        return
+
+    # אתחול הרכיבים
+    engine = GameEngine(board)
+    controller = Controller(engine)
+    
+    # 2. הרצת פקודות כולל פקודות לחיצה (click)
+    for cmd in command_lines:
+        parts = cmd.strip().split()
+        if not parts:
+            continue
+            
+        cmd_type = parts[0].lower()
         
-        # מוצאים את גודל הלוח לפי השורות הראשונות
-        board_lines = []
-        for line in lines:
-            if line.startswith("Commands:"):
-                break
-            if line.strip() and not line.startswith("Board:"):
-                board_lines.append(line.strip().split())
-        
-        height = len(board_lines)
-        width = len(board_lines[0]) if height > 0 else 0
-        board = Board(width, height)
-        
-        # מונים כדי לייצר מזהה ייחודי (id) לכל סוג כלי
-        counters = {}
-        
-        for r in range(height):
-            for c in range(width):
-                cell_text = board_lines[r][c]
-                if cell_text == ".":
-                    continue
-                
-                # פענוח צבע וסוג הכלי מהטקסט (למשל: "wR" -> לבן, צריח)
-                color = PieceColor.WHITE if cell_text[0] == "w" else PieceColor.BLACK
-                kind_char = cell_text[1]
-                
-                if kind_char == "R":
-                    kind = PieceKind.ROOK
-                elif kind_char == "K":
-                    kind = PieceKind.KING
-                elif kind_char == "P":
-                    kind = PieceKind.PAWN
-                elif kind_char == "N":
-                    kind = PieceKind.KNIGHT
-                elif kind_char == "B":
-                    kind = PieceKind.BISHOP
-                elif kind_char == "Q":
-                    kind = PieceKind.QUEEN
-                
-                # יצירת מזהה ייחודי אוטומטי (למשל: "w_R_1")
-                key = f"{cell_text[0]}_{kind_char}"
-                counters[key] = counters.get(key, 0) + 1
-                piece_id = f"{key}_{counters[key]}"
-                
-                # יצירת הכלי עם ה-id החדש והמסונכרן!
-                piece = Piece(id=piece_id, kind=kind, color=color)
-                board.add_piece(r, c, piece)
-                
-        return board
+        if cmd_type == "print" and len(parts) > 1 and parts[1].lower() == "board":
+            print(BoardPrinter.print_board(board))
+        elif cmd_type == "click":
+            try:
+                x = int(parts[1])
+                y = int(parts[2])
+                controller.click(x, y)
+            except (IndexError, ValueError):
+                pass
+        else:
+            engine.execute_command(cmd)
+
+def main():
+    input_data = sys.stdin.read()
+    if input_data.strip():
+        run_game_from_text(input_data)
+
+if __name__ == "__main__":
+    main()
