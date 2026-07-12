@@ -28,10 +28,30 @@ class RealTimeArbiter:
 
     def advance_time(self, ms: int):
         ticks_to_run = ms // 100
+
         for _ in range(ticks_to_run):
             for motion in list(self.active_motions):
                 motion.tick()
+
                 if motion.is_finished():
-                    # הנחתה ישירה של הכלי שנמצא בתוך אובייקט התנועה
-                    self.board.set_piece(motion.destination.row, motion.destination.col, motion.piece)
+
+                    # הכלי עוזב את משבצת המקור רק ברגע ההגעה
+                    self.board.remove_piece(
+                        motion.source.row,
+                        motion.source.col,
+                    )
+
+                    # אם יש אויב ביעד הוא נאכל
+                    self.board.remove_piece(
+                        motion.destination.row,
+                        motion.destination.col,
+                    )
+
+                    # הנחת הכלי ביעד
+                    self.board.set_piece(
+                        motion.destination.row,
+                        motion.destination.col,
+                        motion.piece,
+                    )
+
                     self.active_motions.remove(motion)
