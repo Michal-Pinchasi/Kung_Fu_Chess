@@ -27,16 +27,11 @@ class RealTimeArbiter:
         self.active_motions.append(motion)
 
     def advance_time(self, ms: int):
-        """
-        מריץ את הזמן המדומה קדימה.
-        כשתנועה מסתיימת - היא מבוצעת פיזית על הלוח ללא בדיקות סיום לוגיות.
-        """
         ticks_to_run = ms // 100
-        
         for _ in range(ticks_to_run):
             for motion in list(self.active_motions):
                 motion.tick()
-                
                 if motion.is_finished():
-                    self.board.move_piece(motion.source, motion.destination)
+                    # הנחתה ישירה של הכלי שנמצא בתוך אובייקט התנועה
+                    self.board.set_piece(motion.destination.row, motion.destination.col, motion.piece)
                     self.active_motions.remove(motion)

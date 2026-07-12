@@ -46,3 +46,10 @@ class Board:
         # עדכון מצב הכלי חזרה למנוחה עם נחיתתו[cite: 4]
         if hasattr(piece, 'state'):
             piece.state = "idle"
+    def set_piece(self, row: int, col: int, piece):
+        """מציב כלי ישירות במשבצת (משמש לנחיתה מהאוויר או עדכון ישיר)"""
+        if self.is_valid_position(row, col):
+            self.grid[row][col] = piece
+            if piece is not None and piece != ".":
+                piece.cell = Position(row, col)
+                piece.state = "idle"
