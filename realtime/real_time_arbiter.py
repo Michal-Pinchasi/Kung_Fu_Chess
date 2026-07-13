@@ -1,68 +1,84 @@
-from typing import List
+from typing import List, Tuple
 from model.position import Position
-from realtime.motion import Motion
+from realtime.motion import PendingMove, PendingJump, Jumping
 
 class RealTimeArbiter:
-    """
-    בורר זמן האמת של המשחק.
-    רכיב מכני טהור האחראי אך ורק על הרצת שעון התנועות וביצוען הפיזי על הלוח בנחיתה.
-    """
     def __init__(self, board):
         self.board = board
-        self.active_motions = [] 
+        self.pending = []
+        self.status = {}
+        self.clock_ms = 0
 
     def has_motion_on_path(self, source: Position, destination: Position) -> bool:
-        """בדיקה גיאומטרית יבשה: האם משבצות המקור או היעד תפוסות כרגע בתנועה באוויר"""
-        for motion in self.active_motions:
-            if (motion.source == source or 
-                motion.destination == destination or 
-                motion.destination == source or 
-                motion.source == destination):
-                return True
+        for activity in self.pending:
+            if isinstance(activity, PendingMove):
+                if (activity.frm == source or activity.to == destination or
+                    activity.to == source or activity.frm == destination):
+                    return True
         return False
 
-    def start_motion(self, piece, source: Position, destination: Position, duration_ticks: int = None):
-        """רישום מכני של תנועה חדשה באוויר - תומך בקבלת זמן ידני מהטסטים"""
-        if duration_ticks is None:
-            distance = max(
-                abs(destination.row - source.row),
-                abs(destination.col - source.col)
-            )
-            duration_ticks = distance * 10
+    def schedule_move(self, piece, frm: Position, to: Position) -> PendingMove:
+        distance = max(abs(to.row - frm.row), abs(to.col - frm.col))
+        duration_ms = distance * 1000
 
-        motion = Motion(piece, source, destination, duration_ticks)
-        self.active_motions.append(motion)
+        move = PendingMove(piece, frm, to, self.clock_ms + duration_ms)
+        self.pending.append(move)
+        piece.state = "moving"
+        return move
 
-    def advance_time(self, ms: int) -> List:
-        """מקדמת את הזמן ומחזירה רשימה של כלים שנאכלו (Arrival/Capture Events)"""
-        ticks_to_run = ms // 100
-        captured_pieces = []
+    def schedule_jump(self, piece, pos: Position) -> PendingJump:
+        jump = PendingJump(piece, pos, self.clock_ms + 1000)
+        self.status[pos] = Jumping(jump)
+        self.pending.append(jump)
+        piece.state = "moving"
+        return jump
 
-        for _ in range(ticks_to_run):
-            for motion in list(self.active_motions):
-                motion.tick()
+    def advance_time(self, ms: int) -> Tuple[List[PendingMove], List[PendingMove], List[PendingJump], List[PendingMove]]:
+        """מחזיר גם מהלכים שבוטלו עקב חסימת ידיד (failed_friend_moves)"""
+        intercepted_moves = []
+        finished_moves = []
+        finished_jumps = []
+        failed_friend_moves = []
 
-                if motion.is_finished():
-                    # הסרת הכלי מהמקור
-                    self.board.remove_piece(motion.source.row, motion.source.col)
+        target_time = self.clock_ms + ms
 
-                    # בדיקה האם יש כלי ביעד שעומד להיאכל
-                    target_piece = self.board.get_piece(motion.destination.row, motion.destination.col)
-                    if target_piece is not None:
-                        captured_pieces.append(target_piece)
-                        self.board.remove_piece(motion.destination.row, motion.destination.col)
+        while self.clock_ms < target_time:
+            self.clock_ms += 100
 
-                    # האצלת האחריות החוקתית ל-RuleEngine לפני הנחת הכלי סופית על הלוח
-                    from rules.rule_engine import RuleEngine
-                    RuleEngine.apply_post_arrival_rules(self.board, motion.piece, motion.destination)
+            due_moves = []
+            due_jumps = []
 
-                    # הנחת הכלי ביעד
-                    self.board.set_piece(
-                        motion.destination.row,
-                        motion.destination.col,
-                        motion.piece,
-                    )
+            for act in list(self.pending):
+                if act.end_time_ms <= self.clock_ms:
+                    if isinstance(act, PendingMove):
+                        due_moves.append(act)
+                    elif isinstance(act, PendingJump):
+                        due_jumps.append(act)
 
-                    self.active_motions.remove(motion)
-                    
-        return captured_pieces
+            for move in due_moves:
+                defender_status = self.status.get(move.to)
+
+                if defender_status and isinstance(defender_status, Jumping):
+                    # הגנה אווירית מופעלת אך ורק אם מדובר בכלי אויב! (טסט 6)
+                    if defender_status.jump.piece.color != move.piece.color:
+                        intercepted_moves.append(move)
+                    else:
+                        # אם זה כלי ידידותי באוויר, המהלך נכשל והכלי המגיע נשאר במקומו המקורי
+                        failed_friend_moves.append(move)
+
+                    if move in self.pending:
+                        self.pending.remove(move)
+                else:
+                    finished_moves.append(move)
+
+                    if move in self.pending:
+                        self.pending.remove(move)
+
+            for jump in due_jumps:
+                finished_jumps.append(jump)
+                self.status.pop(jump.pos, None)
+
+                if jump in self.pending:
+                    self.pending.remove(jump)
+
+        return intercepted_moves, finished_moves, finished_jumps, failed_friend_moves

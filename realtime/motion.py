@@ -1,21 +1,21 @@
 from model.position import Position
 
-class Motion:
-    """
-    מייצג אובייקט נתונים של תנועה בודדת שנמצאת כרגע "באוויר" בזמן אמת.
-    מנהל את השעון הפנימי של המהלך עד להגעתו ליעד.
-    """
-    def __init__(self, piece, source: Position, destination: Position, duration_ticks: int):
-        self.piece = piece                  # אובייקט הכלי שזז כרגע
-        self.source = source                # משבצת המקור שממנה הוא יצא
-        self.destination = destination      # משבצת היעד אליה הוא אמור להגיע
-        self.remaining_ticks = duration_ticks  # כמה פעימות זמן (Ticks) נשארו לו עד להגעה
+class PendingMove:
+    """מייצג תנועה קווית רגילה שנמצאת בתהליך"""
+    def __init__(self, piece, frm: Position, to: Position, end_time_ms: int):
+        self.piece = piece
+        self.frm = frm
+        self.to = to
+        self.end_time_ms = end_time_ms
 
-    def tick(self):
-        """מוריד פעימת זמן אחת מהתנועה בכל פעם שהזמן הכללי מתקדם"""
-        if self.remaining_ticks > 0:
-            self.remaining_ticks -= 1
+class PendingJump:
+    """מייצג קפיצה הגנתית במקום שנמצאת בתהליך"""
+    def __init__(self, piece, pos: Position, end_time_ms: int):
+        self.piece = piece
+        self.pos = pos
+        self.end_time_ms = end_time_ms
 
-    def is_finished(self) -> bool:
-        """מחזיר True אם הכלי סיים את זמן התנועה שלו והגיע לרגע ההכרעה"""
-        return self.remaining_ticks <= 0
+class Jumping:
+    """אובייקט הסטטוס של משבצת שמתבצעת בה קפיצה"""
+    def __init__(self, jump: PendingJump):
+        self.jump = jump
