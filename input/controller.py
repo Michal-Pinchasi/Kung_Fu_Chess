@@ -1,18 +1,33 @@
 from model.position import Position
 from input.board_mapper import BoardMapper
 
+
 class Controller:
+    """Translates user input into game commands.
+
+    Maintains selected-cell state and applies the two-click selection
+    protocol. Does not decide chess legality and does not mutate Board directly.
+    """
+
     def __init__(self, game_engine):
         self.engine = game_engine
         self.board = game_engine.board
         self.selected_cell = None
 
-    def click(self, x: int, y: int):
+    def click(self, x: int, y: int) -> None:
+        """Convert pixel coordinates to a cell and handle the click."""
         pos = BoardMapper.pixel_to_cell(x, y, self.board.width, self.board.height)
         if pos is not None:
             self.handle_click(pos)
 
-    def handle_click(self, position: Position):
+    def handle_click(self, position: Position) -> None:
+        """Process a click on a board cell using the two-click selection protocol.
+
+        First click: select the piece at position (ignored when cell is empty).
+        Second click on friendly piece: re-select that piece instead.
+        Second click elsewhere: request a move from selected cell to position.
+        Selection is cleared after every second in-board click.
+        """
         if self.engine.game_state.is_game_over:
             return
 
@@ -26,7 +41,6 @@ class Controller:
         src = self.selected_cell
         self.selected_cell = None
 
-        # אם לחצו על כלי ידידותי — בחירה מחדש במקום ניסיון מהלך
         if piece != "." and piece is not None:
             src_piece = self.board.get_piece(src.row, src.col)
             if src_piece != "." and src_piece is not None and piece.color == src_piece.color:
@@ -36,34 +50,32 @@ class Controller:
         if src != position:
             self.engine.request_move(src, position)
 
-    def execute_command(self, command_str: str):
-        parts = command_str.strip().split() 
-        if not parts: 
+    def execute_command(self, command_str: str) -> None:
+        """Parse and dispatch a raw command string (click, jump, or wait)."""
+        parts = command_str.strip().split()
+        if not parts:
             return
 
-        cmd_type = parts[0].lower() 
+        cmd_type = parts[0].lower()
 
         if cmd_type == "click":
             try:
-                pixel_x = int(parts[1])
-                pixel_y = int(parts[2])
-                self.click(pixel_x, pixel_y)
-            except (IndexError, ValueError): 
+                self.click(int(parts[1]), int(parts[2]))
+            except (IndexError, ValueError):
                 pass
 
         elif cmd_type == "jump":
             try:
-                pixel_x = int(parts[1])
-                pixel_y = int(parts[2])
-                pos = BoardMapper.pixel_to_cell(pixel_x, pixel_y, self.board.width, self.board.height)
+                pos = BoardMapper.pixel_to_cell(
+                    int(parts[1]), int(parts[2]), self.board.width, self.board.height
+                )
                 if pos is not None:
                     self.engine.request_jump(pos)
             except (IndexError, ValueError):
                 pass
 
-        elif cmd_type == "wait": 
+        elif cmd_type == "wait":
             try:
-                ms = int(parts[1]) 
-                self.engine.wait(ms)
-            except (IndexError, ValueError): 
+                self.engine.wait(int(parts[1]))
+            except (IndexError, ValueError):
                 pass

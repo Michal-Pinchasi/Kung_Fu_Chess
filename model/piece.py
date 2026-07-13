@@ -1,7 +1,13 @@
 class Piece:
+    """Represents a single chess piece on the board.
+
+    Holds identity, type, color, and lifecycle state.
+    Does not contain movement logic, pixel coordinates, or timing data.
+    """
+
     def __init__(self, id: str, kind, color):
-        self.id = id          # המזהה הייחודי של הכלי (למשל: "w_pawn1")
-        self.kind = kind      # סוג הכלי (ROOK, PAWN וכדומה)
-        self.color = color    # צבע הכלי (WHITE, BLACK)
-        self.state = "idle"   # מצב הכלי (idle או moving)
-        self.cell = None      # המיקום הנוכחי שלו על הלוח
+        self.id = id        # Unique stable identifier, e.g. "wR_0"
+        self.kind = kind    # PieceKind enum value (ROOK, PAWN, etc.)
+        self.color = color  # PieceColor enum value (WHITE or BLACK)
+        self.state = "idle" # Lifecycle flag: idle | moving | captured
+        self.cell = None    # Current board position (set externally)

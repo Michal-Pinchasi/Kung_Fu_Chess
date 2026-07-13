@@ -1,18 +1,18 @@
 """
-ריכוז כל המשתנים הקבועים של הפרויקט
+Central configuration file for all project-wide constants.
 """
 
-# תאי לוח ותצוגה
+# Display and board geometry
 CELL_SIZE = 100
 
-# זמני תנועה (מילישניות)
+# Movement timing (milliseconds)
 MILLISECONDS_PER_CELL = 1000
 JUMP_DURATION_MILLISECONDS = 1000
 TIME_STEP_MS = 100
 
-# ייצוג משבצת ריקה
+# Board representation
 EMPTY_SQUARE = "."
 
-# הודעות שגיאה
+# Error messages
 ERR_UNKNOWN_TOKEN = "ERROR UNKNOWN_TOKEN"
 ERR_ROW_WIDTH_MISMATCH = "ERROR ROW_WIDTH_MISMATCH"
