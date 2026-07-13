@@ -1,6 +1,7 @@
 from typing import Set
 from model.position import Position
 from model.constants import PieceKind, PieceColor
+from config.config_loader import EMPTY_SQUARE
 
 
 class PieceRules:
@@ -42,7 +43,7 @@ class ChessRuleUtils:
             r, c = position.row + dr, position.col + dc
             while board.is_valid_position(r, c):
                 target = board.get_piece(r, c)
-                if target != ".":
+                if target != EMPTY_SQUARE:
                     if target.color != piece.color:
                         moves.add(Position(r, c))
                     break
@@ -124,7 +125,7 @@ class PawnRules:
         direction = -1 if piece.color == PieceColor.WHITE else 1
 
         f_row, f_col = position.row + direction, position.col
-        if board.is_valid_position(f_row, f_col) and board.get_piece(f_row, f_col) == ".":
+        if board.is_valid_position(f_row, f_col) and board.get_piece(f_row, f_col) == EMPTY_SQUARE:
             moves.add(Position(f_row, f_col))
 
             is_starting_row = (
@@ -133,14 +134,14 @@ class PawnRules:
             )
             if is_starting_row:
                 d_row = position.row + (2 * direction)
-                if board.is_valid_position(d_row, f_col) and board.get_piece(d_row, f_col) == ".":
+                if board.is_valid_position(d_row, f_col) and board.get_piece(d_row, f_col) == EMPTY_SQUARE:
                     moves.add(Position(d_row, f_col))
 
         for dc in [-1, 1]:
             diag_row, diag_col = position.row + direction, position.col + dc
             if board.is_valid_position(diag_row, diag_col):
                 target = board.get_piece(diag_row, diag_col)
-                if target != "." and target.color != piece.color:
+                if target != EMPTY_SQUARE and target.color != piece.color:
                     moves.add(Position(diag_row, diag_col))
 
         return moves

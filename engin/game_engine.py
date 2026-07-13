@@ -1,17 +1,18 @@
-from typing import List
+from dataclasses import dataclass
+from typing import Optional
 from model.position import Position
-from model.game_state import GameState
+from model.game_state import GameState, GameSnapshot, PieceSnapshot
 from rules.rule_engine import RuleEngine
 from realtime.real_time_arbiter import RealTimeArbiter
 from input.controller import Controller
+from config.config_loader import EMPTY_SQUARE
 
 
-class ExecuteResult:
-    """Return value for any GameEngine command indicating acceptance and reason."""
-
-    def __init__(self, is_accepted: bool, reason: str = "ok"):
-        self.is_accepted = is_accepted
-        self.reason = reason
+@dataclass(frozen=True)
+class MoveResult:
+    """Immutable result returned by GameEngine for any move or command request."""
+    is_accepted: bool
+    reason: str = "ok"
 
 
 class GameEngine:
@@ -22,54 +23,77 @@ class GameEngine:
     delegating move legality to RuleEngine and motion scheduling to
     RealTimeArbiter.
 
+    Supports dependency injection for RealTimeArbiter to allow easy
+    substitution in tests.
+
     Does not contain piece-specific movement logic, pixel mapping,
     rendering code, or script parsing.
     """
 
-    def __init__(self, board):
+    def __init__(self, board, arbiter: Optional[RealTimeArbiter] = None):
         self.board = board
         self.game_state = GameState(board)
-        self.arbiter = RealTimeArbiter(board)
+        self.arbiter = arbiter if arbiter is not None else RealTimeArbiter(board)
         self.controller = Controller(self)
 
-    def request_move(self, source: Position, destination: Position) -> ExecuteResult:
+
+    def is_cell_empty(self, position: Position) -> bool:
+        """Return True when the cell at position contains no piece."""
+        piece = self.board.get_piece(position.row, position.col)
+        return piece == EMPTY_SQUARE or piece is None
+
+    def is_friendly_piece(self, position: Position, reference: Position) -> bool:
+        """Return True when the piece at position has the same color as the piece at reference.
+
+        Returns False when either cell is empty.
+        """
+        piece = self.board.get_piece(position.row, position.col)
+        ref_piece = self.board.get_piece(reference.row, reference.col)
+        if piece == EMPTY_SQUARE or piece is None:
+            return False
+        if ref_piece == EMPTY_SQUARE or ref_piece is None:
+            return False
+        return piece.color == ref_piece.color
+
+
+    def request_move(self, source: Position, destination: Position) -> MoveResult:
         """Request a move from source to destination.
 
         Applies guards in order: game_over → motion_in_progress → rule validation.
         Schedules the motion through RealTimeArbiter only when all guards pass.
         """
         if self.game_state.is_game_over:
-            return ExecuteResult(False, "game_over")
+            return MoveResult(False, "game_over")
 
         if self.arbiter.has_motion_on_path(source, destination):
-            return ExecuteResult(False, "motion_in_progress")
+            return MoveResult(False, "motion_in_progress")
 
         validation = RuleEngine.validate_move(self.board, source, destination)
         if not validation.is_valid:
-            return ExecuteResult(False, validation.reason)
+            return MoveResult(False, validation.reason)
 
         piece = self.board.get_piece(source.row, source.col)
         self.arbiter.schedule_move(piece, source, destination)
-        return ExecuteResult(True, "ok")
+        return MoveResult(True, "ok")
 
-    def request_jump(self, position: Position) -> ExecuteResult:
+    def request_jump(self, position: Position) -> MoveResult:
         """Request a defensive jump at position.
 
         Rejected when the game is over, the piece is already moving,
         or a jump is already active at that position.
         """
         if self.game_state.is_game_over:
-            return ExecuteResult(False, "game_over")
+            return MoveResult(False, "game_over")
 
         piece = self.board.get_piece(position.row, position.col)
-        if piece == "." or piece is None:
-            return ExecuteResult(False, "empty_source")
+        if piece == EMPTY_SQUARE or piece is None:
+            return MoveResult(False, "empty_source")
 
         if piece.state == "moving" or position in self.arbiter.status:
-            return ExecuteResult(False, "motion_in_progress")
+            return MoveResult(False, "motion_in_progress")
 
         self.arbiter.schedule_jump(piece, position)
-        return ExecuteResult(True, "ok")
+        return MoveResult(True, "ok")
 
     def wait(self, ms: int) -> None:
         """Advance simulated time by ms milliseconds and process all arrivals.
@@ -97,7 +121,7 @@ class GameEngine:
             self.board.remove_piece(move.frm.row, move.frm.col)
 
             target_piece = self.board.get_piece(move.to.row, move.to.col)
-            if target_piece is not None and target_piece != ".":
+            if target_piece is not None and target_piece != EMPTY_SQUARE:
                 captured_pieces.append(target_piece)
                 target_piece.state = "captured"
                 self.board.remove_piece(move.to.row, move.to.col)
@@ -113,23 +137,32 @@ class GameEngine:
             self.game_state.is_game_over = True
             self.game_state.winner = RuleEngine.get_game_winner(self.board)
 
-    def is_cell_empty(self, position: Position) -> bool:
-        """Return True when the cell at position contains no piece."""
-        piece = self.board.get_piece(position.row, position.col)
-        return piece == "." or piece is None
+    def snapshot(self) -> GameSnapshot:
+        """Return a read-only snapshot of the current game state for the renderer.
 
-    def is_friendly_piece(self, position: Position, reference: Position) -> bool:
-        """Return True when the piece at position has the same color as the piece at reference.
-
-        Returns False when either cell is empty.
+        The snapshot contains piece positions, kinds, colors, states, and
+        the game-over flag. It does not expose live Board or Piece objects.
         """
-        piece = self.board.get_piece(position.row, position.col)
-        ref_piece = self.board.get_piece(reference.row, reference.col)
-        if piece == "." or piece is None:
-            return False
-        if ref_piece == "." or ref_piece is None:
-            return False
-        return piece.color == ref_piece.color
+        pieces = []
+        for r in range(self.board.height):
+            for c in range(self.board.width):
+                piece = self.board.get_piece(r, c)
+                if piece != EMPTY_SQUARE and piece is not None:
+                    pieces.append(PieceSnapshot(
+                        id=piece.id,
+                        kind=piece.kind.value,
+                        color=piece.color.value,
+                        x=float(c),
+                        y=float(r),
+                        state=piece.state,
+                    ))
+        return GameSnapshot(
+            board_width=self.board.width,
+            board_height=self.board.height,
+            pieces=pieces,
+            selected_cell=self.controller.selected_cell,
+            game_over=self.game_state.is_game_over,
+        )
 
     def execute_command(self, command_str: str) -> None:
         """Forward a raw command string to the controller for parsing and dispatch."""

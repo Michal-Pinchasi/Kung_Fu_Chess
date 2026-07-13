@@ -1,6 +1,8 @@
 from model.position import Position
 from model.constants import PieceKind, PieceColor
 from rules.piece_rules import PieceRules
+from config.config_loader import EMPTY_SQUARE
+from typing import Optional
 
 
 class ValidationResult:
@@ -38,7 +40,7 @@ class RuleEngine:
 
         piece = board.get_piece(source.row, source.col)
 
-        if piece == ".":
+        if piece == EMPTY_SQUARE:
             return ValidationResult(False, "empty_source")
 
         if not board.is_valid_position(destination.row, destination.col):
@@ -46,7 +48,7 @@ class RuleEngine:
 
         target_piece = board.get_piece(destination.row, destination.col)
 
-        if target_piece != "." and target_piece.color == piece.color:
+        if target_piece != EMPTY_SQUARE and target_piece.color == piece.color:
             return ValidationResult(False, "friendly_destination")
 
         legal_destinations = PieceRules.legal_destinations(board, piece, source)
@@ -72,12 +74,12 @@ class RuleEngine:
     def check_king_capture(captured_pieces) -> bool:
         """Return True when any piece in captured_pieces is a king."""
         for piece in captured_pieces:
-            if piece != "." and piece.kind == PieceKind.KING:
+            if piece != EMPTY_SQUARE and piece.kind == PieceKind.KING:
                 return True
         return False
 
     @staticmethod
-    def get_game_winner(board) -> str | None:
+    def get_game_winner(board) -> Optional[str]:
         """Scan the board and return the winner based on which king is missing.
 
         Returns "WHITE" when the black king is absent,
@@ -89,7 +91,7 @@ class RuleEngine:
         for row in range(board.height):
             for col in range(board.width):
                 piece = board.get_piece(row, col)
-                if piece != "." and piece.kind == PieceKind.KING:
+                if piece != EMPTY_SQUARE and piece.kind == PieceKind.KING:
                     if piece.color == PieceColor.WHITE:
                         white_king_exists = True
                     elif piece.color == PieceColor.BLACK:

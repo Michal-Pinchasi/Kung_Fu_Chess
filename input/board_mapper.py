@@ -1,5 +1,6 @@
 from model.position import Position
 from config.config_loader import CELL_SIZE
+from typing import Optional
 
 
 class BoardMapper:
@@ -10,7 +11,7 @@ class BoardMapper:
     """
 
     @staticmethod
-    def pixel_to_cell(x: int, y: int, width: int, height: int) -> Position | None:
+    def pixel_to_cell(x: int, y: int, width: int, height: int) -> Optional[Position]:
         """Convert pixel coordinates to a board Position.
 
         Returns None when the mapped cell is outside the board bounds.
