@@ -1,6 +1,7 @@
 from model.board import Board
 from model.piece import Piece
 from model.constants import PieceKind, PieceColor
+from config.constants import EMPTY_SQUARE
 
 class BoardParser:
     @staticmethod
@@ -24,7 +25,7 @@ class BoardParser:
             for c in range(width):
                 token = grid_tokens[r][c]
                 
-                if token == ".":
+                if token == EMPTY_SQUARE:
                     continue
                     
                 if len(token) != 2:

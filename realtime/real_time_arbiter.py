@@ -1,6 +1,7 @@
 from typing import List, Tuple
 from model.position import Position
 from realtime.motion import PendingMove, PendingJump, Jumping
+from config.constants import MILLISECONDS_PER_CELL, JUMP_DURATION_MILLISECONDS, TIME_STEP_MS
 
 class RealTimeArbiter:
     def __init__(self, board):
@@ -19,7 +20,7 @@ class RealTimeArbiter:
 
     def schedule_move(self, piece, frm: Position, to: Position) -> PendingMove:
         distance = max(abs(to.row - frm.row), abs(to.col - frm.col))
-        duration_ms = distance * 1000
+        duration_ms = distance * MILLISECONDS_PER_CELL
 
         move = PendingMove(piece, frm, to, self.clock_ms + duration_ms)
         self.pending.append(move)
@@ -27,7 +28,7 @@ class RealTimeArbiter:
         return move
 
     def schedule_jump(self, piece, pos: Position) -> PendingJump:
-        jump = PendingJump(piece, pos, self.clock_ms + 1000)
+        jump = PendingJump(piece, pos, self.clock_ms + JUMP_DURATION_MILLISECONDS)
         self.status[pos] = Jumping(jump)
         self.pending.append(jump)
         piece.state = "moving"
@@ -43,7 +44,7 @@ class RealTimeArbiter:
         target_time = self.clock_ms + ms
 
         while self.clock_ms < target_time:
-            self.clock_ms += 100
+            self.clock_ms += TIME_STEP_MS
 
             due_moves = []
             due_jumps = []
