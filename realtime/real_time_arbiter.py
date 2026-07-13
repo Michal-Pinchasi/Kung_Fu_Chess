@@ -1,7 +1,7 @@
 from typing import List, Tuple
 from model.position import Position
 from realtime.motion import PendingMove, PendingJump, Jumping
-from config.constants import MILLISECONDS_PER_CELL, JUMP_DURATION_MILLISECONDS, TIME_STEP_MS
+from config.config_loader import MILLISECONDS_PER_CELL, JUMP_DURATION_MILLISECONDS, TIME_STEP_MS
 
 
 class RealTimeArbiter:

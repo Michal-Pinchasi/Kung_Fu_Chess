@@ -1,5 +1,5 @@
 from model.position import Position
-from config.constants import CELL_SIZE
+from config.config_loader import CELL_SIZE
 
 
 class BoardMapper:

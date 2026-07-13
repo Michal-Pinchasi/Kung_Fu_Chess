@@ -1,7 +1,7 @@
 from model.board import Board
 from model.piece import Piece
 from model.constants import PieceKind, PieceColor
-from config.constants import EMPTY_SQUARE
+from config.config_loader import EMPTY_SQUARE
 
 
 class BoardParser:

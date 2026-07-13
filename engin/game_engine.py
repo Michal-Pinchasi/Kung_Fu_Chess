@@ -113,6 +113,24 @@ class GameEngine:
             self.game_state.is_game_over = True
             self.game_state.winner = RuleEngine.get_game_winner(self.board)
 
+    def is_cell_empty(self, position: Position) -> bool:
+        """Return True when the cell at position contains no piece."""
+        piece = self.board.get_piece(position.row, position.col)
+        return piece == "." or piece is None
+
+    def is_friendly_piece(self, position: Position, reference: Position) -> bool:
+        """Return True when the piece at position has the same color as the piece at reference.
+
+        Returns False when either cell is empty.
+        """
+        piece = self.board.get_piece(position.row, position.col)
+        ref_piece = self.board.get_piece(reference.row, reference.col)
+        if piece == "." or piece is None:
+            return False
+        if ref_piece == "." or ref_piece is None:
+            return False
+        return piece.color == ref_piece.color
+
     def execute_command(self, command_str: str) -> None:
         """Forward a raw command string to the controller for parsing and dispatch."""
         self.controller.execute_command(command_str)

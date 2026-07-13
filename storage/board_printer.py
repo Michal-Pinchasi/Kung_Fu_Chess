@@ -1,4 +1,5 @@
 from model.board import Board
+from config.config_loader import EMPTY_SQUARE
 
 
 class BoardPrinter:
@@ -8,7 +9,7 @@ class BoardPrinter:
     def print_board(board: Board) -> str:
         """Return a multi-line string representing the current board state.
 
-        Each row is space-separated. Empty cells are shown as '.'.
+        Each row is space-separated. Empty cells are shown as EMPTY_SQUARE.
         Occupied cells are shown as two-character tokens, e.g. 'wR' or 'bK'.
         """
         lines = []
@@ -16,8 +17,8 @@ class BoardPrinter:
             row_tokens = []
             for c in range(board.width):
                 piece = board.get_piece(r, c)
-                if piece == ".":
-                    row_tokens.append(".")
+                if piece == EMPTY_SQUARE:
+                    row_tokens.append(EMPTY_SQUARE)
                 else:
                     row_tokens.append(f"{piece.color.value}{piece.kind.value}")
             lines.append(" ".join(row_tokens))

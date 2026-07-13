@@ -6,46 +6,49 @@ class Controller:
     """Translates user input into game commands.
 
     Maintains selected-cell state and applies the two-click selection
-    protocol. Does not decide chess legality and does not mutate Board directly.
+    protocol. Does not read the board directly, does not evaluate piece
+    colors or emptiness, and does not check game_over. All game-state
+    queries go through GameEngine.
     """
 
     def __init__(self, game_engine):
         self.engine = game_engine
-        self.board = game_engine.board
         self.selected_cell = None
 
     def click(self, x: int, y: int) -> None:
-        """Convert pixel coordinates to a cell and handle the click."""
-        pos = BoardMapper.pixel_to_cell(x, y, self.board.width, self.board.height)
-        if pos is not None:
-            self.handle_click(pos)
+        """Convert pixel coordinates to a board cell and handle the click.
+
+        Out-of-bounds clicks are ignored when no piece is selected.
+        Out-of-bounds clicks clear selection when a piece is already selected.
+        """
+        pos = BoardMapper.pixel_to_cell(
+            x, y, self.engine.board.width, self.engine.board.height
+        )
+        if pos is None:
+            if self.selected_cell is not None:
+                self.selected_cell = None
+            return
+        self.handle_click(pos)
 
     def handle_click(self, position: Position) -> None:
-        """Process a click on a board cell using the two-click selection protocol.
+        """Process an in-bounds click using the two-click selection protocol.
 
-        First click: select the piece at position (ignored when cell is empty).
-        Second click on friendly piece: re-select that piece instead.
-        Second click elsewhere: request a move from selected cell to position.
-        Selection is cleared after every second in-board click.
+        First click: select the cell when it contains a piece (via engine query).
+        Second click on friendly piece: switch selection to the new piece.
+        Second click elsewhere: send request_move to the engine and clear selection.
+        Selection is always cleared after the second in-bounds click.
         """
-        if self.engine.game_state.is_game_over:
-            return
-
-        piece = self.board.get_piece(position.row, position.col)
-
         if self.selected_cell is None:
-            if piece != "." and piece is not None:
+            if not self.engine.is_cell_empty(position):
                 self.selected_cell = position
             return
 
         src = self.selected_cell
         self.selected_cell = None
 
-        if piece != "." and piece is not None:
-            src_piece = self.board.get_piece(src.row, src.col)
-            if src_piece != "." and src_piece is not None and piece.color == src_piece.color:
-                self.selected_cell = position
-                return
+        if self.engine.is_friendly_piece(position, src):
+            self.selected_cell = position
+            return
 
         if src != position:
             self.engine.request_move(src, position)
@@ -67,7 +70,8 @@ class Controller:
         elif cmd_type == "jump":
             try:
                 pos = BoardMapper.pixel_to_cell(
-                    int(parts[1]), int(parts[2]), self.board.width, self.board.height
+                    int(parts[1]), int(parts[2]),
+                    self.engine.board.width, self.engine.board.height,
                 )
                 if pos is not None:
                     self.engine.request_jump(pos)
