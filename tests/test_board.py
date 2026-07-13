@@ -18,7 +18,6 @@ def test_board_add_and_get_piece():
     
     assert board.add_piece(1, 1, piece) is True
     assert board.get_piece(1, 1) == piece
-    assert piece.cell == Position(1, 1)
     
     # הוספה על משבצת תפוסה או מחוץ ללוח
     piece2 = Piece(id="bK1", kind=PieceKind.KING, color=PieceColor.BLACK)
@@ -34,7 +33,6 @@ def test_board_remove_and_move_piece():
     board.move_piece(Position(0, 0), Position(2, 2))
     assert board.get_piece(0, 0) == "."
     assert board.get_piece(2, 2) == piece
-    assert piece.cell == Position(2, 2)
     
     # מקרים לא חוקיים של תנועה
     board.move_piece(Position(0, 0), Position(3, 3))  # מקור ריק

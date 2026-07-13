@@ -36,7 +36,7 @@ class RealTimeArbiter:
     def advance_time(self, ms: int) -> List:
         """מקדמת את הזמן ומחזירה רשימה של כלים שנאכלו (Arrival/Capture Events)"""
         ticks_to_run = ms // 100
-        captured_pieces = []  # רשימה שתאסוף את כל הכלים שנאכלו בצעד זה
+        captured_pieces = []
 
         for _ in range(ticks_to_run):
             for motion in list(self.active_motions):
@@ -49,10 +49,14 @@ class RealTimeArbiter:
                     # בדיקה האם יש כלי ביעד שעומד להיאכל
                     target_piece = self.board.get_piece(motion.destination.row, motion.destination.col)
                     if target_piece is not None:
-                        captured_pieces.append(target_piece)  # שומרים את הכלי שנאכל
+                        captured_pieces.append(target_piece)
                         self.board.remove_piece(motion.destination.row, motion.destination.col)
 
-                    # הנחת הכלי שהגיע ביעד
+                    # האצלת האחריות החוקתית ל-RuleEngine לפני הנחת הכלי סופית על הלוח
+                    from rules.rule_engine import RuleEngine
+                    RuleEngine.apply_post_arrival_rules(self.board, motion.piece, motion.destination)
+
+                    # הנחת הכלי ביעד
                     self.board.set_piece(
                         motion.destination.row,
                         motion.destination.col,
@@ -61,4 +65,4 @@ class RealTimeArbiter:
 
                     self.active_motions.remove(motion)
                     
-        return captured_pieces  # מחזיר את הכלים שנאכלו ל-GameEngine
+        return captured_pieces

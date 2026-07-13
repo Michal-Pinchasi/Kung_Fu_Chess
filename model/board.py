@@ -20,13 +20,16 @@ class Board:
         if self.grid[row][col] != ".":
             return False
         self.grid[row][col] = piece
-        if piece is not None and piece != ".":
-            piece.cell = Position(row, col)
         return True
 
     def remove_piece(self, row: int, col: int):
         if self.is_valid_position(row, col):
             self.grid[row][col] = "."
+
+    def set_piece(self, row: int, col: int, piece):
+        """השמה ישירה של כלי במשבצת (נדרש על ידי ה-Arbiter בזמן נחיתה)"""
+        if self.is_valid_position(row, col):
+            self.grid[row][col] = piece
 
     def move_piece(self, source: Position, destination: Position):
         if not self.is_valid_position(source.row, source.col) or not self.is_valid_position(destination.row, destination.col):
@@ -38,12 +41,3 @@ class Board:
 
         self.remove_piece(source.row, source.col)
         self.grid[destination.row][destination.col] = piece
-        
-        if hasattr(piece, 'cell'):
-            piece.cell = destination
-
-    def set_piece(self, row: int, col: int, piece):
-        if self.is_valid_position(row, col):
-            self.grid[row][col] = piece
-            if piece is not None and piece != ".":
-                piece.cell = Position(row, col)

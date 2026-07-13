@@ -8,7 +8,6 @@ from rules.piece_rules import PieceRules
 def test_rook_moves_clear_and_blocked():
     """1. בדיקת צריח: וידוא תנועה ב-4 כיוונים ועצירה כשנחסם על ידי כלי"""
     board = Board(width=5, height=5)
-    # תוקן סדר הפרמטרים: id, kind, color
     rook = Piece(id="wR_1", kind=PieceKind.ROOK, color=PieceColor.WHITE)
     board.add_piece(2, 2, rook)
 
@@ -53,8 +52,8 @@ def test_king_moves():
     assert len(destinations) == 8
 
 def test_white_pawn_forward_and_diagonal_capture():
-    """5. בדיקת רגלי לבן: צעד קדימה לריק ואכילה באלכסון כשיש אויב"""
-    board = Board(width=3, height=3)
+    """5. בדיקת רגלי לבן: צעד קדימה לריק ואכילה באלכסון כשיש אויב (הוגדל ל-4 כדי שלא יהיה בשורת מקור)"""
+    board = Board(width=3, height=4) # שורת המקור כעת היא 3, לכן שורה 2 היא שורה רגילה
     pawn = Piece(id="wP_1", kind=PieceKind.PAWN, color=PieceColor.WHITE)
     board.add_piece(2, 1, pawn)
 
@@ -65,8 +64,31 @@ def test_white_pawn_forward_and_diagonal_capture():
     expected_moves = {Position(1, 1), Position(1, 2)}
     assert destinations == expected_moves
 
+def test_pawn_double_move_from_start_row():
+    """6. בדיקת רגלי: וידוא קבלת צעד כפול משורת המקור כשאין חסימות"""
+    board = Board(width=3, height=4)
+    pawn = Piece(id="wP_1", kind=PieceKind.PAWN, color=PieceColor.WHITE)
+    board.add_piece(3, 1, pawn)
+
+    destinations = PieceRules.legal_destinations(board, pawn, Position(3, 1))
+    expected_moves = {Position(2, 1), Position(1, 1)}
+    assert destinations == expected_moves
+
+def test_pawn_double_move_blocked():
+    """7. בדיקת רגלי: וידוא שצעד כפול נחסם אם יש כלי במשבצת השנייה"""
+    board = Board(width=3, height=4)
+    pawn = Piece(id="wP_1", kind=PieceKind.PAWN, color=PieceColor.WHITE)
+    board.add_piece(3, 1, pawn)
+    
+    blocker = Piece(id="bR_1", kind=PieceKind.ROOK, color=PieceColor.BLACK)
+    board.add_piece(1, 1, blocker)
+
+    destinations = PieceRules.legal_destinations(board, pawn, Position(3, 1))
+    expected_moves = {Position(2, 1)}
+    assert destinations == expected_moves
+
 def test_unknown_piece_kind_returns_empty_set():
-    """6. בדיקת הגנה: סוג כלי לא מוכר מחזיר קבוצה ריקה"""
+    """8. בדיקת גלם: סוג כלי לא מוכר מחזיר קבוצה ריקה"""
     board = Board(width=3, height=3)
     fake_piece = Piece(id="wX_1", kind=None, color=PieceColor.WHITE)
     
