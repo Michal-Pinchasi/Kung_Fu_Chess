@@ -111,8 +111,8 @@ class KnightRules:
 class PawnRules:
     """Movement rules for the pawn.
 
-    - White pawns move upward (decreasing row index).
-    - Black pawns move downward (increasing row index).
+    - White pawns move downward (increasing row index in our UI layout).
+    - Black pawns move upward (decreasing row index in our UI layout).
     - One step forward is legal only when the destination is empty.
     - Two steps forward from the starting row is legal only when both
       intermediate and destination cells are empty.
@@ -122,15 +122,18 @@ class PawnRules:
     @staticmethod
     def get_moves(board, piece, position: Position) -> Set[Position]:
         moves = set()
-        direction = -1 if piece.color == PieceColor.WHITE else 1
+        
+        # שינוי כאן: לבן זז פלוס 1 (למטה), שחור זז מינוס 1 (למעלה)
+        direction = 1 if piece.color == PieceColor.WHITE else -1
 
         f_row, f_col = position.row + direction, position.col
         if board.is_valid_position(f_row, f_col) and board.get_piece(f_row, f_col) == EMPTY_SQUARE:
             moves.add(Position(f_row, f_col))
 
+            # שינוי כאן: שורת ההתחלה של לבן היא 1 (למעלה), ושל שחור היא 6 (למטה, שזה board.height - 2)
             is_starting_row = (
-                (piece.color == PieceColor.WHITE and position.row == board.height - 2)
-                or (piece.color == PieceColor.BLACK and position.row == 1)
+                (piece.color == PieceColor.WHITE and position.row == 1)
+                or (piece.color == PieceColor.BLACK and position.row == board.height - 2)
             )
             if is_starting_row:
                 d_row = position.row + (2 * direction)

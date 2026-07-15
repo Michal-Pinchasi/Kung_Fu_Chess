@@ -1,0 +1,19 @@
+{
+  "window_title": "Kung Fu Chess",
+  "fps": 30,
+
+  "selection_color": [0, 255, 255, 120],
+  "move_hint_color": [0, 255, 0, 80],
+  "game_over_overlay_color": [0, 0, 0, 160],
+
+  "game_over_text": "GAME OVER",
+  "game_over_font_size": 3.0,
+  "game_over_text_color": [255, 255, 255, 255],
+  "game_over_text_thickness": 5,
+
+  "winner_font_size": 2.0,
+  "winner_text_color": [255, 220, 50, 255],
+  "winner_text_thickness": 3,
+
+  "piece_size_fraction": 0.90
+}

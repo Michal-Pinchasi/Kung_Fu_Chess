@@ -1,0 +1,24 @@
+class Layout:
+    """
+    Single source of truth for all UI geometry.
+
+    BOARD_X / BOARD_Y     : top-left corner of the board image on the window.
+    BOARD_SIZE            : board image is scaled to this size (pixels).
+    BOARD_BORDER          : measured border width inside the board image.
+                            The actual playing squares start at
+                            (BOARD_X + BOARD_BORDER, BOARD_Y + BOARD_BORDER).
+    SQUARE_SIZE           : size of one chess square in pixels
+                            (= (BOARD_SIZE - 2 * BOARD_BORDER) / 8).
+    """
+
+    WINDOW_WIDTH  = 1600
+    WINDOW_HEIGHT = 900
+
+    BOARD_SIZE   = 800
+    BOARD_X      = 250
+    BOARD_Y      = 50
+
+    # Measured from board.jpg at 800×800:
+    # First square boundary at x=80, last at x=640 → 8 squares × 80px
+    BOARD_BORDER  = 80          # pixels from board edge to first square
+    SQUARE_SIZE   = 80          # pixels per square  (= (800 - 2*80) / 8)

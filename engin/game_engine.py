@@ -164,6 +164,17 @@ class GameEngine:
             game_over=self.game_state.is_game_over,
         )
 
+    def click_at_window_pixel(self, px: int, py: int) -> None:
+        """Translate a window pixel click into a board cell and forward to the controller."""
+        from view.ui.layout.coordinate_mapper import CoordinateMapper
+        result = CoordinateMapper.pixel_to_cell(px, py)
+        print(f"[DEBUG] click px={px} py={py} -> cell={result}, selected={self.controller.selected_cell}")
+        if result is None:
+            self.controller.selected_cell = None
+            return
+        row, col = result
+        self.controller.handle_click(Position(row, col))
+
     def execute_command(self, command_str: str) -> None:
         """Forward a raw command string to the controller for parsing and dispatch."""
         self.controller.execute_command(command_str)
