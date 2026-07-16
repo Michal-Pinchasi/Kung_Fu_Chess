@@ -9,5 +9,5 @@ class Piece:
         self.id = id        # Unique stable identifier, e.g. "wR_0"
         self.kind = kind    # PieceKind enum value (ROOK, PAWN, etc.)
         self.color = color  # PieceColor enum value (WHITE or BLACK)
-        self.state = "idle" # Lifecycle flag: idle | moving | captured
+        self.state = "idle" # Lifecycle flag: idle | moving | jump | captured
         self.cell = None    # Current board position (set externally)

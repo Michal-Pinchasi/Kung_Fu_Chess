@@ -85,29 +85,28 @@ def test_king_moves():
 
 def test_white_pawn_forward_only_on_non_start_row():
     """White pawn on a non-starting row can move one step forward and capture diagonally."""
-    # height=5: starting row for white = height-2 = 3, so row 2 is NOT the starting row
+    # White's starting row is fixed at row 1, so row 2 is NOT the starting row
     board = Board(width=3, height=5)
     pawn = Piece(id="wP_1", kind=PieceKind.PAWN, color=PieceColor.WHITE)
     board.add_piece(2, 1, pawn)
     enemy = Piece(id="bK_1", kind=PieceKind.KING, color=PieceColor.BLACK)
-    board.add_piece(1, 2, enemy)
+    board.add_piece(3, 2, enemy)
 
     destinations = PieceRules.legal_destinations(board, pawn, Position(2, 1))
 
-    assert destinations == {Position(1, 1), Position(1, 2)}
+    assert destinations == {Position(3, 1), Position(3, 2)}
 
 
 def test_pawn_double_move_from_start_row():
-    """White pawn on the starting row (height-2) can move two steps forward."""
+    """White pawn on the starting row (row 1) can move two steps forward."""
     board = Board(width=3, height=4)
     pawn = Piece(id="wP_1", kind=PieceKind.PAWN, color=PieceColor.WHITE)
-    # starting row for white = height-2 = 2
-    board.add_piece(2, 1, pawn)
+    board.add_piece(1, 1, pawn)
 
-    destinations = PieceRules.legal_destinations(board, pawn, Position(2, 1))
+    destinations = PieceRules.legal_destinations(board, pawn, Position(1, 1))
 
-    assert Position(1, 1) in destinations  # one step
-    assert Position(0, 1) in destinations  # two steps
+    assert Position(2, 1) in destinations  # one step
+    assert Position(3, 1) in destinations  # two steps
 
 
 def test_pawn_double_move_blocked_by_intermediate():

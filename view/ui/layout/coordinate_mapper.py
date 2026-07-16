@@ -25,6 +25,13 @@ class CoordinateMapper:
         return x, y
 
     @staticmethod
+    def cell_to_pixel_f(row: float, col: float) -> Tuple[float, float]:
+        """Float-precision version of cell_to_pixel, for interpolated animation positions."""
+        x = Layout.BOARD_X + Layout.BOARD_BORDER + col * Layout.SQUARE_SIZE
+        y = Layout.BOARD_Y + Layout.BOARD_BORDER + row * Layout.SQUARE_SIZE
+        return x, y
+
+    @staticmethod
     def cell_center_to_pixel(row: int, col: int) -> Tuple[int, int]:
         """Return the pixel centre of the cell at (row, col)."""
         x, y = CoordinateMapper.cell_to_pixel(row, col)

@@ -1,5 +1,6 @@
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 from model.position import Position
+from model.constants import PieceColor
 from realtime.motion import PendingMove, PendingJump, Jumping
 from config.config_loader import MILLISECONDS_PER_CELL, JUMP_DURATION_MILLISECONDS, TIME_STEP_MS
 
@@ -22,23 +23,35 @@ class RealTimeArbiter:
         self.status = {}
         self.clock_ms = 0
 
-    def has_motion_on_path(self, source: Position, destination: Position) -> bool:
-        """Return True when any active PendingMove conflicts with the given source or destination."""
+    def has_motion_on_path(self, source: Position, destination: Position, color: PieceColor) -> bool:
+        """Return True when any active PendingMove conflicts with the given source or destination.
+
+        Two pieces of different colors are allowed to race to the same destination —
+        whichever arrives first lands normally, and the later arrival captures it on
+        landing (resolved naturally by advance_time against live board state). Only a
+        same-color race to the same destination is blocked here; re-using an in-flight
+        piece's own source, or targeting a square another pending move is departing
+        from/to, is always blocked regardless of color.
+        """
         for activity in self.pending:
             if isinstance(activity, PendingMove):
-                if (
-                    activity.frm == source
-                    or activity.to == destination
-                    or activity.to == source
-                    or activity.frm == destination
-                ):
+                if activity.frm == source:
+                    return True
+                if activity.to == destination and activity.piece.color == color:
+                    return True
+                if activity.to == source or activity.frm == destination:
                     return True
         return False
 
+    @staticmethod
+    def _move_duration_ms(frm: Position, to: Position) -> int:
+        """Travel duration for a move: Chebyshev distance × MILLISECONDS_PER_CELL."""
+        distance = max(abs(to.row - frm.row), abs(to.col - frm.col))
+        return distance * MILLISECONDS_PER_CELL
+
     def schedule_move(self, piece, frm: Position, to: Position) -> PendingMove:
         """Create and register a PendingMove. Duration is proportional to Chebyshev distance."""
-        distance = max(abs(to.row - frm.row), abs(to.col - frm.col))
-        duration_ms = distance * MILLISECONDS_PER_CELL
+        duration_ms = self._move_duration_ms(frm, to)
         move = PendingMove(piece, frm, to, self.clock_ms + duration_ms)
         self.pending.append(move)
         piece.state = "moving"
@@ -49,8 +62,31 @@ class RealTimeArbiter:
         jump = PendingJump(piece, pos, self.clock_ms + JUMP_DURATION_MILLISECONDS)
         self.status[pos] = Jumping(jump)
         self.pending.append(jump)
-        piece.state = "moving"
+        piece.state = "jump"
         return jump
+
+    def get_move_progress(self, piece) -> Optional[Tuple[Position, Position, float]]:
+        """Return (frm, to, progress 0..1) for piece's active PendingMove, or None."""
+        for act in self.pending:
+            if isinstance(act, PendingMove) and act.piece is piece:
+                duration_ms = self._move_duration_ms(act.frm, act.to)
+                if duration_ms <= 0:
+                    return act.frm, act.to, 1.0
+                elapsed = duration_ms - (act.end_time_ms - self.clock_ms)
+                progress = max(0.0, min(1.0, elapsed / duration_ms))
+                return act.frm, act.to, progress
+        return None
+
+    def get_state_elapsed_ms(self, piece) -> int:
+        """Elapsed ms since piece's current PendingMove/PendingJump started (0 if none active)."""
+        for act in self.pending:
+            if act.piece is piece:
+                if isinstance(act, PendingMove):
+                    duration_ms = self._move_duration_ms(act.frm, act.to)
+                else:
+                    duration_ms = JUMP_DURATION_MILLISECONDS
+                return max(0, duration_ms - (act.end_time_ms - self.clock_ms))
+        return 0
 
     def advance_time(self, ms: int) -> Tuple[
         List[PendingMove],
@@ -74,7 +110,7 @@ class RealTimeArbiter:
         target_time = self.clock_ms + ms
 
         while self.clock_ms < target_time:
-            self.clock_ms += TIME_STEP_MS
+            self.clock_ms += min(TIME_STEP_MS, target_time - self.clock_ms)
 
             due_moves = []
             due_jumps = []

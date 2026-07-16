@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Optional
 from model.position import Position
 from model.game_state import GameState, GameSnapshot, PieceSnapshot
+from model.move_history import MoveHistory
 from rules.rule_engine import RuleEngine
 from realtime.real_time_arbiter import RealTimeArbiter
 from input.controller import Controller
@@ -35,6 +36,7 @@ class GameEngine:
         self.game_state = GameState(board)
         self.arbiter = arbiter if arbiter is not None else RealTimeArbiter(board)
         self.controller = Controller(self)
+        self.move_history = MoveHistory()
 
 
     def is_cell_empty(self, position: Position) -> bool:
@@ -59,20 +61,26 @@ class GameEngine:
     def request_move(self, source: Position, destination: Position) -> MoveResult:
         """Request a move from source to destination.
 
-        Applies guards in order: game_over → motion_in_progress → rule validation.
-        Schedules the motion through RealTimeArbiter only when all guards pass.
+        Applies guards in order: game_over → empty_source → motion_in_progress → rule
+        validation. Schedules the motion through RealTimeArbiter only when all guards
+        pass. A same-destination race against an in-flight piece of the other color is
+        allowed (see RealTimeArbiter.has_motion_on_path); against the same color it is
+        rejected as motion_in_progress.
         """
         if self.game_state.is_game_over:
             return MoveResult(False, "game_over")
 
-        if self.arbiter.has_motion_on_path(source, destination):
+        piece = self.board.get_piece(source.row, source.col)
+        if piece == EMPTY_SQUARE or piece is None:
+            return MoveResult(False, "empty_source")
+
+        if self.arbiter.has_motion_on_path(source, destination, piece.color):
             return MoveResult(False, "motion_in_progress")
 
         validation = RuleEngine.validate_move(self.board, source, destination)
         if not validation.is_valid:
             return MoveResult(False, validation.reason)
 
-        piece = self.board.get_piece(source.row, source.col)
         self.arbiter.schedule_move(piece, source, destination)
         return MoveResult(True, "ok")
 
@@ -89,7 +97,7 @@ class GameEngine:
         if piece == EMPTY_SQUARE or piece is None:
             return MoveResult(False, "empty_source")
 
-        if piece.state == "moving" or position in self.arbiter.status:
+        if piece.state in ("moving", "jump") or position in self.arbiter.status:
             return MoveResult(False, "motion_in_progress")
 
         self.arbiter.schedule_jump(piece, position)
@@ -121,7 +129,8 @@ class GameEngine:
             self.board.remove_piece(move.frm.row, move.frm.col)
 
             target_piece = self.board.get_piece(move.to.row, move.to.col)
-            if target_piece is not None and target_piece != EMPTY_SQUARE:
+            is_capture = target_piece is not None and target_piece != EMPTY_SQUARE
+            if is_capture:
                 captured_pieces.append(target_piece)
                 target_piece.state = "captured"
                 self.board.remove_piece(move.to.row, move.to.col)
@@ -129,6 +138,11 @@ class GameEngine:
             RuleEngine.apply_post_arrival_rules(self.board, move.piece, move.to)
             self.board.set_piece(move.to.row, move.to.col, move.piece)
             move.piece.state = "idle"
+
+            self.move_history.add_move(
+                move.piece.color.value, move.frm, move.to,
+                move.piece.kind.value, is_capture
+            )
 
         for jump in finished_jumps:
             jump.piece.state = "idle"
@@ -148,13 +162,25 @@ class GameEngine:
             for c in range(self.board.width):
                 piece = self.board.get_piece(r, c)
                 if piece != EMPTY_SQUARE and piece is not None:
+                    x, y = float(c), float(r)
+                    elapsed_state_ms = 0
+                    if piece.state == "moving":
+                        progress_info = self.arbiter.get_move_progress(piece)
+                        if progress_info:
+                            frm, to, progress = progress_info
+                            x = frm.col + (to.col - frm.col) * progress
+                            y = frm.row + (to.row - frm.row) * progress
+                        elapsed_state_ms = self.arbiter.get_state_elapsed_ms(piece)
+                    elif piece.state == "jump":
+                        elapsed_state_ms = self.arbiter.get_state_elapsed_ms(piece)
                     pieces.append(PieceSnapshot(
                         id=piece.id,
                         kind=piece.kind.value,
                         color=piece.color.value,
-                        x=float(c),
-                        y=float(r),
+                        x=x,
+                        y=y,
                         state=piece.state,
+                        elapsed_state_ms=elapsed_state_ms,
                     ))
         return GameSnapshot(
             board_width=self.board.width,
@@ -162,18 +188,27 @@ class GameEngine:
             pieces=pieces,
             selected_cell=self.controller.selected_cell,
             game_over=self.game_state.is_game_over,
+            move_history=self.move_history,
         )
 
     def click_at_window_pixel(self, px: int, py: int) -> None:
         """Translate a window pixel click into a board cell and forward to the controller."""
         from view.ui.layout.coordinate_mapper import CoordinateMapper
         result = CoordinateMapper.pixel_to_cell(px, py)
-        print(f"[DEBUG] click px={px} py={py} -> cell={result}, selected={self.controller.selected_cell}")
         if result is None:
             self.controller.selected_cell = None
             return
         row, col = result
         self.controller.handle_click(Position(row, col))
+
+    def jump_at_window_pixel(self, px: int, py: int) -> None:
+        """Translate a right-click pixel into a board cell and request a defensive jump there."""
+        from view.ui.layout.coordinate_mapper import CoordinateMapper
+        result = CoordinateMapper.pixel_to_cell(px, py)
+        if result is None:
+            return
+        row, col = result
+        self.request_jump(Position(row, col))
 
     def execute_command(self, command_str: str) -> None:
         """Forward a raw command string to the controller for parsing and dispatch."""

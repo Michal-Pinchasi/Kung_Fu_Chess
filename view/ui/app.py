@@ -6,8 +6,8 @@ import os
 import sys
 import cv2
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from storage.board_parser import BoardParser
 from engin.game_engine import GameEngine
@@ -15,6 +15,7 @@ from view.ui.window.game_canvas import GameCanvas
 from view.ui.rendering.board_renderer import BoardRenderer
 from view.ui.rendering.piece_renderer import PieceRenderer
 from view.ui.rendering.overlay_renderer import OverlayRenderer
+from view.ui.rendering.move_history_renderer import MoveHistoryRenderer
 from view.ui.scene.game_scene import GameScene
 from view.ui.input.mouse_handler import MouseHandler
 from view.ui.config.ui_config_loader import FPS, WINDOW_TITLE
@@ -45,8 +46,9 @@ def app(board_text: str = _DEFAULT_BOARD) -> None:
     board_renderer   = BoardRenderer(BOARD_PATH)
     piece_renderer   = PieceRenderer(PIECES_DIR)
     overlay_renderer = OverlayRenderer()
+    move_history_renderer = MoveHistoryRenderer()
     scene            = GameScene(canvas, board_renderer, piece_renderer,
-                                 overlay_renderer, engine)
+                                 overlay_renderer, engine, move_history_renderer)
     mouse_handler = MouseHandler(engine)
 
     window_name = WINDOW_TITLE

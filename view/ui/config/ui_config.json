@@ -15,5 +15,7 @@
   "winner_text_color": [255, 220, 50, 255],
   "winner_text_thickness": 3,
 
-  "piece_size_fraction": 0.90
+  "piece_size_fraction": 0.90,
+  "sprite_frame_duration_ms": 100,
+  "sprite_frame_count": 5
 }

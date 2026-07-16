@@ -20,18 +20,29 @@ def test_has_motion_on_path_source_conflict():
 
     arbiter.schedule_move(piece, Position(0, 0), Position(0, 5))
 
-    assert arbiter.has_motion_on_path(Position(0, 0), Position(3, 3)) is True
+    assert arbiter.has_motion_on_path(Position(0, 0), Position(3, 3), PieceColor.WHITE) is True
 
 
-def test_has_motion_on_path_destination_conflict():
-    """has_motion_on_path returns True when a pending move ends at the given destination."""
+def test_has_motion_on_path_destination_conflict_same_color():
+    """Same-color race to the same destination is blocked."""
     arbiter, board = _make_arbiter()
     piece = Piece(id="wR_1", kind=PieceKind.ROOK, color=PieceColor.WHITE)
     board.add_piece(0, 0, piece)
 
     arbiter.schedule_move(piece, Position(0, 0), Position(0, 5))
 
-    assert arbiter.has_motion_on_path(Position(3, 3), Position(0, 5)) is True
+    assert arbiter.has_motion_on_path(Position(3, 3), Position(0, 5), PieceColor.WHITE) is True
+
+
+def test_has_motion_on_path_destination_conflict_different_color_allowed():
+    """Different-color race to the same destination is allowed (race to capture)."""
+    arbiter, board = _make_arbiter()
+    piece = Piece(id="wR_1", kind=PieceKind.ROOK, color=PieceColor.WHITE)
+    board.add_piece(0, 0, piece)
+
+    arbiter.schedule_move(piece, Position(0, 0), Position(0, 5))
+
+    assert arbiter.has_motion_on_path(Position(3, 3), Position(0, 5), PieceColor.BLACK) is False
 
 
 def test_has_motion_on_path_no_conflict():
@@ -42,7 +53,7 @@ def test_has_motion_on_path_no_conflict():
 
     arbiter.schedule_move(piece, Position(0, 0), Position(0, 5))
 
-    assert arbiter.has_motion_on_path(Position(2, 2), Position(3, 3)) is False
+    assert arbiter.has_motion_on_path(Position(2, 2), Position(3, 3), PieceColor.WHITE) is False
 
 
 def test_schedule_move_sets_piece_state():
@@ -103,7 +114,7 @@ def test_schedule_jump_registers_status():
     arbiter.schedule_jump(piece, Position(3, 3))
 
     assert Position(3, 3) in arbiter.status
-    assert piece.state == "moving"
+    assert piece.state == "jump"
 
 
 def test_advance_time_clears_jump_status_on_completion():
@@ -118,3 +129,91 @@ def test_advance_time_clears_jump_status_on_completion():
 
     assert Position(3, 3) not in arbiter.status
     assert len(arbiter.pending) == 0
+
+
+def test_advance_time_does_not_overshoot_below_time_step():
+    """A ms smaller than TIME_STEP_MS advances the clock by exactly ms, not a full step."""
+    arbiter, board = _make_arbiter()
+
+    arbiter.advance_time(33)
+
+    assert arbiter.clock_ms == 33
+
+
+def test_advance_time_accumulates_sub_step_calls_precisely():
+    """Repeated small advances match the sum of their real durations."""
+    arbiter, board = _make_arbiter()
+
+    for _ in range(30):
+        arbiter.advance_time(33)
+
+    assert arbiter.clock_ms == 990
+
+
+def test_get_move_progress_none_for_idle_piece():
+    """An idle piece with no pending move has no progress."""
+    arbiter, board = _make_arbiter()
+    piece = Piece(id="wR_1", kind=PieceKind.ROOK, color=PieceColor.WHITE)
+    board.add_piece(0, 0, piece)
+
+    assert arbiter.get_move_progress(piece) is None
+
+
+def test_get_move_progress_zero_right_after_scheduling():
+    """Progress is 0.0 immediately after scheduling a move."""
+    arbiter, board = _make_arbiter()
+    piece = Piece(id="wR_1", kind=PieceKind.ROOK, color=PieceColor.WHITE)
+    board.add_piece(0, 0, piece)
+
+    arbiter.schedule_move(piece, Position(0, 0), Position(0, 2))
+
+    frm, to, progress = arbiter.get_move_progress(piece)
+    assert frm == Position(0, 0)
+    assert to == Position(0, 2)
+    assert progress == 0.0
+
+
+def test_get_state_elapsed_ms_zero_for_idle_piece():
+    """A piece with no pending activity has zero elapsed state time."""
+    arbiter, board = _make_arbiter()
+    piece = Piece(id="wR_1", kind=PieceKind.ROOK, color=PieceColor.WHITE)
+    board.add_piece(0, 0, piece)
+
+    assert arbiter.get_state_elapsed_ms(piece) == 0
+
+
+def test_get_state_elapsed_ms_during_move():
+    """Elapsed ms tracks the clock partway through a move."""
+    arbiter, board = _make_arbiter()
+    piece = Piece(id="wR_1", kind=PieceKind.ROOK, color=PieceColor.WHITE)
+    board.add_piece(0, 0, piece)
+
+    arbiter.schedule_move(piece, Position(0, 0), Position(0, 2))
+    arbiter.clock_ms = 700
+
+    assert arbiter.get_state_elapsed_ms(piece) == 700
+
+
+def test_get_state_elapsed_ms_during_jump():
+    """Elapsed ms tracks the clock partway through a defensive jump."""
+    arbiter, board = _make_arbiter()
+    piece = Piece(id="wK_1", kind=PieceKind.KING, color=PieceColor.WHITE)
+    board.add_piece(3, 3, piece)
+
+    arbiter.schedule_jump(piece, Position(3, 3))
+    arbiter.clock_ms = 400
+
+    assert arbiter.get_state_elapsed_ms(piece) == 400
+
+
+def test_get_move_progress_full_before_resolution():
+    """Progress reaches 1.0 once the full duration has elapsed, before advance_time resolves it."""
+    arbiter, board = _make_arbiter()
+    piece = Piece(id="wR_1", kind=PieceKind.ROOK, color=PieceColor.WHITE)
+    board.add_piece(0, 0, piece)
+
+    arbiter.schedule_move(piece, Position(0, 0), Position(0, 2))
+    arbiter.clock_ms = 2000  # full 2-cell duration elapsed, but advance_time not called
+
+    _, _, progress = arbiter.get_move_progress(piece)
+    assert progress == 1.0

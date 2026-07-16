@@ -2,7 +2,6 @@ import sys
 from storage.board_parser import BoardParser
 from storage.board_printer import BoardPrinter
 from engin.game_engine import GameEngine
-from input.controller import Controller
 from config.config_loader import ERR_UNKNOWN_TOKEN, ERR_ROW_WIDTH_MISMATCH
 
 
@@ -52,7 +51,7 @@ def run_game_from_text(input_text: str) -> None:
         return
 
     engine = GameEngine(board)
-    controller = Controller(engine)
+    controller = engine.controller
 
     for cmd in command_lines:
         parts = cmd.strip().split()
