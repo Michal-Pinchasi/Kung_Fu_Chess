@@ -60,29 +60,27 @@ class GameEngine:
         return piece.color == ref_piece.color
 
 
-    def request_move(self, source: Position, destination: Position) -> MoveResult:
-        """Request a move from source to destination.
-
-        Applies guards in order: game_over → motion_in_progress (piece must be
-        idle — not already moving, jumping, or resting) → rule validation.
-        Schedules the motion through RealTimeArbiter only when all guards pass.
-        RuleEngine remains the sole authority on source-emptiness and every other
-        legality rule; the piece is only pre-fetched here (never used to
-        independently decide legality) so its state/color can be checked. A
-        same-destination race against an in-flight piece of the other color is
-        allowed (see RealTimeArbiter.has_motion_on_path); against the same color it
-        is rejected as motion_in_progress.
-        """
+    def _validate_pre_action(self, position: Position) -> tuple[bool, str, object]:
+        """Helper: runs common checks before any action. Returns (is_valid, reason, piece)."""
         if self.game_state.is_game_over:
-            return MoveResult(False, "game_over")
+            return False, "game_over", None
+            
+        piece = self.board.get_piece(position.row, position.col)
+        if piece == EMPTY_SQUARE or piece is None:
+            return False, "empty_source", None
+            
+        if piece.state != "idle":
+            return False, "motion_in_progress", piece
+            
+        return True, "ok", piece
+    
+    def request_move(self, source: Position, destination: Position) -> MoveResult:
+        is_valid, reason, piece = self._validate_pre_action(source)
+        if not is_valid: return MoveResult(False, reason)
 
-        piece = self.board.get_piece(source.row, source.col)
-        if piece != EMPTY_SQUARE and piece is not None:
-            if piece.state != "idle":
-                return MoveResult(False, "motion_in_progress")
-            if self.arbiter.has_motion_on_path(destination, piece.color):
-                return MoveResult(False, "motion_in_progress")
-
+        if self.arbiter.has_motion_on_path(destination, piece.color):
+            return MoveResult(False, "motion_in_progress")
+            
         validation = RuleEngine.validate_move(self.board, source, destination)
         if not validation.is_valid:
             return MoveResult(False, validation.reason)
@@ -91,20 +89,10 @@ class GameEngine:
         return MoveResult(True, "ok")
 
     def request_jump(self, position: Position) -> MoveResult:
-        """Request a defensive jump at position.
+        is_valid, reason, piece = self._validate_pre_action(position)
+        if not is_valid: return MoveResult(False, reason)
 
-        Rejected when the game is over, the piece is not idle (already moving,
-        jumping, or resting after a previous action), or a jump is already
-        active at that position.
-        """
-        if self.game_state.is_game_over:
-            return MoveResult(False, "game_over")
-
-        piece = self.board.get_piece(position.row, position.col)
-        if piece == EMPTY_SQUARE or piece is None:
-            return MoveResult(False, "empty_source")
-
-        if piece.state != "idle" or position in self.arbiter.status:
+        if position in self.arbiter.status:
             return MoveResult(False, "motion_in_progress")
 
         self.arbiter.schedule_jump(piece, position)
@@ -124,19 +112,40 @@ class GameEngine:
            nothing further to do here.
 
         Credits each captured piece's point value to the capturing side's score,
-        and sets game_over when a king is captured.
+        and sets game_over when a king is captured. Delegates to small private
+        helpers, one per arrival category, so this method stays a thin
+        orchestrator over arbiter results rather than doing the work itself.
         """
         intercepted, finished_moves, finished_jumps, finished_rests, failed_friends = self.arbiter.advance_time(ms)
-        captured_pieces = []
 
-        for move in intercepted:
+        captured_pieces = self._process_intercepted(intercepted)
+        self._process_failed_friends(failed_friends)
+        self._process_finished_moves(finished_moves, captured_pieces)
+        self._process_game_logic(captured_pieces)
+
+    def _process_intercepted(self, intercepted_moves) -> list:
+        """Mark each mid-flight-intercepted attacker as captured.
+
+        Returns a new captured_pieces list, seeded with these attackers, for
+        the caller to keep passing through the rest of this tick's processing.
+        """
+        captured_pieces = []
+        for move in intercepted_moves:
             self.board.remove_piece(move.frm.row, move.frm.col)
             move.piece.state = "captured"
             captured_pieces.append(move.piece)
+        return captured_pieces
 
+    def _process_failed_friends(self, failed_friends) -> None:
+        """Reset each move blocked by a friendly jump back to idle."""
         for move in failed_friends:
             move.piece.state = "idle"
 
+    def _process_finished_moves(self, finished_moves, captured_pieces) -> None:
+        """Apply board movement, capture, promotion, and move-history recording.
+
+        Appends any piece captured on arrival to captured_pieces in place.
+        """
         for move in finished_moves:
             self.board.remove_piece(move.frm.row, move.frm.col)
 
@@ -155,6 +164,8 @@ class GameEngine:
                 move.piece.kind.value, is_capture
             )
 
+    def _process_game_logic(self, captured_pieces) -> None:
+        """Credit score for this tick's captures and check the win condition."""
         self._credit_captures(captured_pieces)
 
         if RuleEngine.check_king_capture(captured_pieces):
@@ -206,26 +217,3 @@ class GameEngine:
             move_history=self.move_history,
             score=self.score,
         )
-
-    def click_at_window_pixel(self, px: int, py: int) -> None:
-        """Translate a window pixel click into a board cell and forward to the controller."""
-        from view.ui.layout.coordinate_mapper import CoordinateMapper
-        result = CoordinateMapper.pixel_to_cell(px, py)
-        if result is None:
-            self.controller.selected_cell = None
-            return
-        row, col = result
-        self.controller.handle_click(Position(row, col))
-
-    def jump_at_window_pixel(self, px: int, py: int) -> None:
-        """Translate a right-click pixel into a board cell and request a defensive jump there."""
-        from view.ui.layout.coordinate_mapper import CoordinateMapper
-        result = CoordinateMapper.pixel_to_cell(px, py)
-        if result is None:
-            return
-        row, col = result
-        self.request_jump(Position(row, col))
-
-    def execute_command(self, command_str: str) -> None:
-        """Forward a raw command string to the controller for parsing and dispatch."""
-        self.controller.execute_command(command_str)

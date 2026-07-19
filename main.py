@@ -1,74 +1,33 @@
 import sys
-from storage.board_parser import BoardParser
-from storage.board_printer import BoardPrinter
+from storage.script_parser import ScriptParser
+from storage.board_parser import (
+    BoardParser, BoardParseError, RowWidthMismatchError, UnknownPieceTokenError,
+)
 from engin.game_engine import GameEngine
 from config.config_loader import ERR_UNKNOWN_TOKEN, ERR_ROW_WIDTH_MISMATCH
 
 
 def run_game_from_text(input_text: str) -> None:
-    """Parse a text script and run the game commands against a fresh engine.
+    """Parse a text script and run it against a fresh engine.
 
-    The script format:
-        Board:
-        <board rows>
-        Commands:
-        <command lines>
-
-    Supported commands: click, jump, wait, print board.
-    Prints error tokens to stdout when board parsing fails.
+    Prints a stable error token to stdout when board parsing fails.
     """
-    lines = input_text.strip().split("\n")
-    board_lines = []
-    command_lines = []
-
-    in_commands = False
-    for line in lines:
-        cleaned_line = line.strip()
-        if not cleaned_line:
-            continue
-        if cleaned_line.startswith("Commands:"):
-            in_commands = True
-            continue
-        if cleaned_line.startswith("Board:"):
-            continue
-        if not in_commands:
-            board_lines.append(cleaned_line)
-        else:
-            command_lines.append(cleaned_line)
-
-    board_text = "\n".join(board_lines)
+    board_text, command_lines = ScriptParser.split(input_text)
 
     try:
         board = BoardParser.parse(board_text)
-    except ValueError as e:
-        err_msg = str(e)
-        if "Inconsistent row lengths" in err_msg:
-            print(ERR_ROW_WIDTH_MISMATCH)
-        elif "Unknown piece token" in err_msg or "Invalid piece token" in err_msg:
-            print(ERR_UNKNOWN_TOKEN)
-        else:
-            print("ERROR")
+    except RowWidthMismatchError:
+        print(ERR_ROW_WIDTH_MISMATCH)
+        return
+    except UnknownPieceTokenError:
+        print(ERR_UNKNOWN_TOKEN)
+        return
+    except BoardParseError:
+        print("ERROR")
         return
 
     engine = GameEngine(board)
-    controller = engine.controller
-
-    for cmd in command_lines:
-        parts = cmd.strip().split()
-        if not parts:
-            continue
-
-        cmd_type = parts[0].lower()
-
-        if cmd_type == "print" and len(parts) > 1 and parts[1].lower() == "board":
-            print(BoardPrinter.print_board(board))
-        elif cmd_type == "click":
-            try:
-                controller.click(int(parts[1]), int(parts[2]))
-            except (IndexError, ValueError):
-                pass
-        else:
-            engine.execute_command(cmd)
+    engine.controller.run_script(command_lines)
 
 
 def main() -> None:

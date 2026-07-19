@@ -123,14 +123,12 @@ class PawnRules:
     def get_moves(board, piece, position: Position) -> Set[Position]:
         moves = set()
         
-        # שינוי כאן: לבן זז פלוס 1 (למטה), שחור זז מינוס 1 (למעלה)
         direction = 1 if piece.color == PieceColor.WHITE else -1
 
         f_row, f_col = position.row + direction, position.col
         if board.is_valid_position(f_row, f_col) and board.get_piece(f_row, f_col) == EMPTY_SQUARE:
             moves.add(Position(f_row, f_col))
 
-            # שינוי כאן: שורת ההתחלה של לבן היא 1 (למעלה), ושל שחור היא 6 (למטה, שזה board.height - 2)
             is_starting_row = (
                 (piece.color == PieceColor.WHITE and position.row == 1)
                 or (piece.color == PieceColor.BLACK and position.row == board.height - 2)

@@ -47,39 +47,39 @@ class MoveHistoryRenderer:
         frame.draw_rect(
             x, y,
             Layout.MOVE_PANEL_WIDTH, Layout.MOVE_PANEL_HEIGHT,
-            color=(50, 50, 50, 255),
+            color=Layout.PANEL_BACKGROUND_COLOR,
             thickness=-1,
-            alpha=0.7
+            alpha=Layout.PANEL_BACKGROUND_ALPHA
         )
 
         # Draw border
         frame.draw_rect(
             x, y,
             Layout.MOVE_PANEL_WIDTH, Layout.MOVE_PANEL_HEIGHT,
-            color=(200, 200, 200, 255),
-            thickness=2
+            color=Layout.PANEL_BORDER_COLOR,
+            thickness=Layout.PANEL_BORDER_THICKNESS
         )
 
         # Draw player name title
         frame.put_text(
             player_name,
             x + Layout.MOVE_TEXT_X_OFFSET,
-            y + 15,
-            font_size=0.6,
+            y + Layout.MOVE_TITLE_Y_OFFSET,
+            font_size=Layout.MOVE_TITLE_FONT_SIZE,
             color=Layout.MOVE_TEXT_COLOR,
-            thickness=1
+            thickness=Layout.MOVE_TEXT_THICKNESS
         )
 
         # Draw separator line
         frame.draw_rect(
-            x + 5, y + 25,
-            Layout.MOVE_PANEL_WIDTH - 10, 1,
-            color=(200, 200, 200, 255),
-            thickness=1
+            x + Layout.PANEL_SEPARATOR_MARGIN, y + Layout.MOVE_SEPARATOR_Y_OFFSET,
+            Layout.MOVE_PANEL_WIDTH - 2 * Layout.PANEL_SEPARATOR_MARGIN, Layout.SEPARATOR_LINE_HEIGHT,
+            color=Layout.PANEL_BORDER_COLOR,
+            thickness=Layout.SEPARATOR_LINE_HEIGHT
         )
 
         # Draw moves — leave room at the bottom for the score line
-        moves_bottom = y + Layout.MOVE_PANEL_HEIGHT - Layout.SCORE_BOTTOM_MARGIN - 20
+        moves_bottom = y + Layout.MOVE_PANEL_HEIGHT - Layout.SCORE_BOTTOM_MARGIN - Layout.SCORE_SEPARATOR_GAP
         current_y = y + Layout.MOVE_TEXT_Y_OFFSET + 5
         for i, move in enumerate(moves):
             if current_y + Layout.MOVE_TEXT_LINE_HEIGHT > moves_bottom:
@@ -90,7 +90,7 @@ class MoveHistoryRenderer:
                     current_y,
                     font_size=Layout.MOVE_FONT_SIZE,
                     color=Layout.MOVE_TEXT_COLOR,
-                    thickness=1
+                    thickness=Layout.MOVE_TEXT_THICKNESS
                 )
                 break
 
@@ -106,7 +106,7 @@ class MoveHistoryRenderer:
                 current_y,
                 font_size=Layout.MOVE_FONT_SIZE,
                 color=Layout.MOVE_TEXT_COLOR,
-                thickness=1
+                thickness=Layout.MOVE_TEXT_THICKNESS
             )
 
             current_y += Layout.MOVE_TEXT_LINE_HEIGHT
@@ -116,10 +116,10 @@ class MoveHistoryRenderer:
         score_y = y + Layout.MOVE_PANEL_HEIGHT - Layout.SCORE_BOTTOM_MARGIN
 
         frame.draw_rect(
-            x + 5, score_y - 20,
-            Layout.MOVE_PANEL_WIDTH - 10, 1,
-            color=(200, 200, 200, 255),
-            thickness=1
+            x + Layout.PANEL_SEPARATOR_MARGIN, score_y - Layout.SCORE_SEPARATOR_GAP,
+            Layout.MOVE_PANEL_WIDTH - 2 * Layout.PANEL_SEPARATOR_MARGIN, Layout.SEPARATOR_LINE_HEIGHT,
+            color=Layout.PANEL_BORDER_COLOR,
+            thickness=Layout.SEPARATOR_LINE_HEIGHT
         )
 
         frame.put_text(

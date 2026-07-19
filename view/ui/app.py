@@ -49,7 +49,7 @@ def app(board_text: str = _DEFAULT_BOARD) -> None:
     move_history_renderer = MoveHistoryRenderer()
     scene            = GameScene(canvas, board_renderer, piece_renderer,
                                  overlay_renderer, engine, move_history_renderer)
-    mouse_handler = MouseHandler(engine)
+    mouse_handler = MouseHandler(engine.controller)
 
     window_name = WINDOW_TITLE
     ms_per_frame = 1000 // FPS

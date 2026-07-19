@@ -106,6 +106,90 @@ class RealTimeArbiter:
                 return max(0, duration_ms - (act.end_time_ms - self.clock_ms))
         return 0
 
+    def _extract_due_activities(self) -> Tuple[List[PendingMove], List[PendingJump], List[PendingRest]]:
+        """Split currently pending activities into those whose end_time_ms has arrived.
+
+        Returns (due_moves, due_jumps, due_rests). Does not mutate self.pending —
+        resolution and removal happen in the corresponding _resolve_due_* methods.
+        """
+        due_moves = []
+        due_jumps = []
+        due_rests = []
+
+        for act in list(self.pending):
+            if act.end_time_ms <= self.clock_ms:
+                if isinstance(act, PendingMove):
+                    due_moves.append(act)
+                elif isinstance(act, PendingJump):
+                    due_jumps.append(act)
+                elif isinstance(act, PendingRest):
+                    due_rests.append(act)
+
+        return due_moves, due_jumps, due_rests
+
+    def _resolve_due_moves(
+        self, due_moves: List[PendingMove]
+    ) -> Tuple[List[PendingMove], List[PendingMove], List[PendingMove]]:
+        """Resolve each due move against the defensive-jump status at its destination.
+
+        A move is intercepted (enemy jump present), blocked (friendly jump present),
+        or lands normally — which begins a long_rest cooldown via _begin_rest. Removes
+        each resolved move from self.pending. Returns
+        (intercepted_moves, finished_moves, failed_friend_moves).
+        """
+        intercepted_moves = []
+        finished_moves = []
+        failed_friend_moves = []
+
+        for move in due_moves:
+            defender_status = self.status.get(move.to)
+
+            if defender_status and isinstance(defender_status, Jumping):
+                if defender_status.jump.piece.color != move.piece.color:
+                    intercepted_moves.append(move)
+                else:
+                    failed_friend_moves.append(move)
+                if move in self.pending:
+                    self.pending.remove(move)
+            else:
+                finished_moves.append(move)
+                if move in self.pending:
+                    self.pending.remove(move)
+                self._begin_rest(move.piece, LONG_REST_DURATION_MILLISECONDS, "long_rest")
+
+        return intercepted_moves, finished_moves, failed_friend_moves
+
+    def _resolve_due_jumps(self, due_jumps: List[PendingJump]) -> List[PendingJump]:
+        """Release each due jump's cell status and begin a short_rest cooldown.
+
+        Removes each resolved jump from self.pending. Returns finished_jumps.
+        """
+        finished_jumps = []
+
+        for jump in due_jumps:
+            finished_jumps.append(jump)
+            self.status.pop(jump.pos, None)
+            if jump in self.pending:
+                self.pending.remove(jump)
+            self._begin_rest(jump.piece, SHORT_REST_DURATION_MILLISECONDS, "short_rest")
+
+        return finished_jumps
+
+    def _resolve_due_rests(self, due_rests: List[PendingRest]) -> List[PendingRest]:
+        """Return each due rest's piece to idle and remove it from self.pending.
+
+        Returns finished_rests.
+        """
+        finished_rests = []
+
+        for rest in due_rests:
+            finished_rests.append(rest)
+            rest.piece.state = "idle"
+            if rest in self.pending:
+                self.pending.remove(rest)
+
+        return finished_rests
+
     def advance_time(self, ms: int) -> Tuple[
         List[PendingMove],
         List[PendingMove],
@@ -136,47 +220,14 @@ class RealTimeArbiter:
         while self.clock_ms < target_time:
             self.clock_ms += min(TIME_STEP_MS, target_time - self.clock_ms)
 
-            due_moves = []
-            due_jumps = []
-            due_rests = []
+            due_moves, due_jumps, due_rests = self._extract_due_activities()
 
-            for act in list(self.pending):
-                if act.end_time_ms <= self.clock_ms:
-                    if isinstance(act, PendingMove):
-                        due_moves.append(act)
-                    elif isinstance(act, PendingJump):
-                        due_jumps.append(act)
-                    elif isinstance(act, PendingRest):
-                        due_rests.append(act)
+            tick_intercepted, tick_finished, tick_failed_friend = self._resolve_due_moves(due_moves)
+            intercepted_moves.extend(tick_intercepted)
+            finished_moves.extend(tick_finished)
+            failed_friend_moves.extend(tick_failed_friend)
 
-            for move in due_moves:
-                defender_status = self.status.get(move.to)
-
-                if defender_status and isinstance(defender_status, Jumping):
-                    if defender_status.jump.piece.color != move.piece.color:
-                        intercepted_moves.append(move)
-                    else:
-                        failed_friend_moves.append(move)
-
-                    if move in self.pending:
-                        self.pending.remove(move)
-                else:
-                    finished_moves.append(move)
-                    if move in self.pending:
-                        self.pending.remove(move)
-                    self._begin_rest(move.piece, LONG_REST_DURATION_MILLISECONDS, "long_rest")
-
-            for jump in due_jumps:
-                finished_jumps.append(jump)
-                self.status.pop(jump.pos, None)
-                if jump in self.pending:
-                    self.pending.remove(jump)
-                self._begin_rest(jump.piece, SHORT_REST_DURATION_MILLISECONDS, "short_rest")
-
-            for rest in due_rests:
-                finished_rests.append(rest)
-                rest.piece.state = "idle"
-                if rest in self.pending:
-                    self.pending.remove(rest)
+            finished_jumps.extend(self._resolve_due_jumps(due_jumps))
+            finished_rests.extend(self._resolve_due_rests(due_rests))
 
         return intercepted_moves, finished_moves, finished_jumps, finished_rests, failed_friend_moves

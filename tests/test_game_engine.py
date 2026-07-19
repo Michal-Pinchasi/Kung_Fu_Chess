@@ -456,33 +456,6 @@ def test_snapshot_elapsed_state_ms_during_jump():
     assert jumping.elapsed_state_ms == 400
 
 
-def test_jump_at_window_pixel_requests_jump_and_sets_state():
-    """A right-click pixel on a piece triggers a defensive jump."""
-    board = Board(4, 4)
-    king = Piece(id="wK_1", kind=PieceKind.KING, color=PieceColor.WHITE)
-    board.add_piece(1, 1, king)
-    engine = GameEngine(board)
-
-    from view.ui.layout.coordinate_mapper import CoordinateMapper
-    px, py = CoordinateMapper.cell_center_to_pixel(1, 1)
-
-    engine.jump_at_window_pixel(px, py)
-
-    assert king.state == "jump"
-    assert Position(1, 1) in engine.arbiter.status
-
-
-def test_jump_at_window_pixel_outside_board_is_noop():
-    """A right-click outside the board does nothing."""
-    board, rook = _board_with_rook()
-    engine = GameEngine(board)
-
-    engine.jump_at_window_pixel(-100, -100)
-
-    assert rook.state == "idle"
-    assert len(engine.arbiter.pending) == 0
-
-
 def test_is_friendly_piece_query():
     board = Board(4, 4)
     white = Piece(id="wR_1", kind=PieceKind.ROOK, color=PieceColor.WHITE)

@@ -1,5 +1,7 @@
 import pytest
-from storage.board_parser import BoardParser
+from storage.board_parser import (
+    BoardParser, EmptyBoardError, RowWidthMismatchError, UnknownPieceTokenError,
+)
 from model.constants import PieceKind, PieceColor
 
 def test_parse_valid_board():
@@ -36,3 +38,23 @@ def test_parse_invalid_token():
     bad_text = "wK . wX"
     with pytest.raises(ValueError):
         BoardParser.parse(bad_text)
+
+def test_parse_empty_board_raises_specific_type():
+    with pytest.raises(EmptyBoardError):
+        BoardParser.parse("")
+
+def test_parse_row_width_mismatch_raises_specific_type():
+    bad_text = (
+        "wK . .\n"
+        ". bR"
+    )
+    with pytest.raises(RowWidthMismatchError):
+        BoardParser.parse(bad_text)
+
+def test_parse_bad_token_length_raises_specific_type():
+    with pytest.raises(UnknownPieceTokenError):
+        BoardParser.parse("wK . wXX")
+
+def test_parse_unknown_color_or_kind_raises_specific_type():
+    with pytest.raises(UnknownPieceTokenError):
+        BoardParser.parse("wK . wX")
