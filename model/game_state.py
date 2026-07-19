@@ -1,5 +1,6 @@
 from model.board import Board
 from model.move_history import MoveHistory
+from model.score import Score
 from typing import List, Optional
 
 
@@ -36,6 +37,7 @@ class GameSnapshot:
         selected_cell,
         game_over: bool,
         move_history: Optional[MoveHistory] = None,
+        score: Optional[Score] = None,
     ):
         self.board_width = board_width
         self.board_height = board_height
@@ -43,3 +45,4 @@ class GameSnapshot:
         self.selected_cell = selected_cell
         self.game_over = game_over
         self.move_history = move_history
+        self.score = score

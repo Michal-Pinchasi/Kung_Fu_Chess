@@ -31,4 +31,3 @@ WINNER_TEXT_THICKNESS: int = _c["winner_text_thickness"]
 
 PIECE_SIZE_FRACTION: float = _c["piece_size_fraction"]
 SPRITE_FRAME_DURATION_MS: int = _c["sprite_frame_duration_ms"]
-SPRITE_FRAME_COUNT: int = _c["sprite_frame_count"]

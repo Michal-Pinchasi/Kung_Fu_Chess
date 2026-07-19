@@ -3,6 +3,7 @@ from typing import Optional
 from model.position import Position
 from model.game_state import GameState, GameSnapshot, PieceSnapshot
 from model.move_history import MoveHistory
+from model.score import Score
 from rules.rule_engine import RuleEngine
 from realtime.real_time_arbiter import RealTimeArbiter
 from input.controller import Controller
@@ -37,6 +38,7 @@ class GameEngine:
         self.arbiter = arbiter if arbiter is not None else RealTimeArbiter(board)
         self.controller = Controller(self)
         self.move_history = MoveHistory()
+        self.score = Score()
 
 
     def is_cell_empty(self, position: Position) -> bool:
@@ -61,21 +63,25 @@ class GameEngine:
     def request_move(self, source: Position, destination: Position) -> MoveResult:
         """Request a move from source to destination.
 
-        Applies guards in order: game_over → empty_source → motion_in_progress → rule
-        validation. Schedules the motion through RealTimeArbiter only when all guards
-        pass. A same-destination race against an in-flight piece of the other color is
-        allowed (see RealTimeArbiter.has_motion_on_path); against the same color it is
-        rejected as motion_in_progress.
+        Applies guards in order: game_over → motion_in_progress (piece must be
+        idle — not already moving, jumping, or resting) → rule validation.
+        Schedules the motion through RealTimeArbiter only when all guards pass.
+        RuleEngine remains the sole authority on source-emptiness and every other
+        legality rule; the piece is only pre-fetched here (never used to
+        independently decide legality) so its state/color can be checked. A
+        same-destination race against an in-flight piece of the other color is
+        allowed (see RealTimeArbiter.has_motion_on_path); against the same color it
+        is rejected as motion_in_progress.
         """
         if self.game_state.is_game_over:
             return MoveResult(False, "game_over")
 
         piece = self.board.get_piece(source.row, source.col)
-        if piece == EMPTY_SQUARE or piece is None:
-            return MoveResult(False, "empty_source")
-
-        if self.arbiter.has_motion_on_path(source, destination, piece.color):
-            return MoveResult(False, "motion_in_progress")
+        if piece != EMPTY_SQUARE and piece is not None:
+            if piece.state != "idle":
+                return MoveResult(False, "motion_in_progress")
+            if self.arbiter.has_motion_on_path(destination, piece.color):
+                return MoveResult(False, "motion_in_progress")
 
         validation = RuleEngine.validate_move(self.board, source, destination)
         if not validation.is_valid:
@@ -87,8 +93,9 @@ class GameEngine:
     def request_jump(self, position: Position) -> MoveResult:
         """Request a defensive jump at position.
 
-        Rejected when the game is over, the piece is already moving,
-        or a jump is already active at that position.
+        Rejected when the game is over, the piece is not idle (already moving,
+        jumping, or resting after a previous action), or a jump is already
+        active at that position.
         """
         if self.game_state.is_game_over:
             return MoveResult(False, "game_over")
@@ -97,7 +104,7 @@ class GameEngine:
         if piece == EMPTY_SQUARE or piece is None:
             return MoveResult(False, "empty_source")
 
-        if piece.state in ("moving", "jump") or position in self.arbiter.status:
+        if piece.state != "idle" or position in self.arbiter.status:
             return MoveResult(False, "motion_in_progress")
 
         self.arbiter.schedule_jump(piece, position)
@@ -106,15 +113,20 @@ class GameEngine:
     def wait(self, ms: int) -> None:
         """Advance simulated time by ms milliseconds and process all arrivals.
 
-        Handles four arrival categories returned by RealTimeArbiter:
+        Handles the arrival categories returned by RealTimeArbiter:
         1. Intercepted moves (stopped by an enemy jump).
         2. Failed friendly moves (blocked by a friendly jump).
-        3. Finished moves (normal landings with optional capture).
-        4. Finished jumps (defensive jumps that completed).
+        3. Finished moves (normal landings with optional capture) — the arbiter
+           already put the piece into a long_rest cooldown.
+        4. Finished jumps (defensive jumps that completed) — the arbiter already
+           put the piece into a short_rest cooldown.
+        5. Finished rests — the arbiter already returned the piece to idle;
+           nothing further to do here.
 
-        Sets game_over when a king is captured.
+        Credits each captured piece's point value to the capturing side's score,
+        and sets game_over when a king is captured.
         """
-        intercepted, finished_moves, finished_jumps, failed_friends = self.arbiter.advance_time(ms)
+        intercepted, finished_moves, finished_jumps, finished_rests, failed_friends = self.arbiter.advance_time(ms)
         captured_pieces = []
 
         for move in intercepted:
@@ -137,19 +149,22 @@ class GameEngine:
 
             RuleEngine.apply_post_arrival_rules(self.board, move.piece, move.to)
             self.board.set_piece(move.to.row, move.to.col, move.piece)
-            move.piece.state = "idle"
 
             self.move_history.add_move(
                 move.piece.color.value, move.frm, move.to,
                 move.piece.kind.value, is_capture
             )
 
-        for jump in finished_jumps:
-            jump.piece.state = "idle"
+        self._credit_captures(captured_pieces)
 
         if RuleEngine.check_king_capture(captured_pieces):
             self.game_state.is_game_over = True
             self.game_state.winner = RuleEngine.get_game_winner(self.board)
+
+    def _credit_captures(self, captured_pieces) -> None:
+        """Award score points for every piece captured this tick."""
+        for piece in captured_pieces:
+            self.score.credit_capture(piece)
 
     def snapshot(self) -> GameSnapshot:
         """Return a read-only snapshot of the current game state for the renderer.
@@ -189,6 +204,7 @@ class GameEngine:
             selected_cell=self.controller.selected_cell,
             game_over=self.game_state.is_game_over,
             move_history=self.move_history,
+            score=self.score,
         )
 
     def click_at_window_pixel(self, px: int, py: int) -> None:

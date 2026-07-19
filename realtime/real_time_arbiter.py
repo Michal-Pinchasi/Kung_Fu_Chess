@@ -1,18 +1,24 @@
 from typing import List, Optional, Tuple
 from model.position import Position
 from model.constants import PieceColor
-from realtime.motion import PendingMove, PendingJump, Jumping
-from config.config_loader import MILLISECONDS_PER_CELL, JUMP_DURATION_MILLISECONDS, TIME_STEP_MS
+from realtime.motion import PendingMove, PendingJump, Jumping, PendingRest
+from config.config_loader import (
+    MILLISECONDS_PER_CELL, JUMP_DURATION_MILLISECONDS, TIME_STEP_MS,
+    LONG_REST_DURATION_MILLISECONDS, SHORT_REST_DURATION_MILLISECONDS,
+)
 
 
 class RealTimeArbiter:
     """Manages all active motions and advances simulated game time.
 
     Responsibilities:
-    - Schedule and track PendingMove and PendingJump objects.
+    - Schedule and track PendingMove, PendingJump, and PendingRest objects.
     - Advance the internal clock in fixed time steps.
     - Resolve arrivals: normal landings, aerial interceptions, and
       friendly-fire blocked moves.
+    - Automatically begin a post-action rest cooldown (long_rest after a
+      landed move, short_rest after a completed jump) and release it back
+      to idle when the cooldown elapses.
 
     Does not contain chess legality logic, click handling, or rendering.
     """
@@ -23,25 +29,37 @@ class RealTimeArbiter:
         self.status = {}
         self.clock_ms = 0
 
-    def has_motion_on_path(self, source: Position, destination: Position, color: PieceColor) -> bool:
-        """Return True when any active PendingMove conflicts with the given source or destination.
+    def has_motion_on_path(self, destination: Position, color: PieceColor) -> bool:
+        """Return True when a same-color piece is already pending to land on destination.
 
-        Two pieces of different colors are allowed to race to the same destination —
-        whichever arrives first lands normally, and the later arrival captures it on
-        landing (resolved naturally by advance_time against live board state). Only a
-        same-color race to the same destination is blocked here; re-using an in-flight
-        piece's own source, or targeting a square another pending move is departing
-        from/to, is always blocked regardless of color.
+        This is the one collision RuleEngine.validate_move can't see on its own: it
+        only checks the current board snapshot, not other in-flight pieces that
+        haven't arrived yet. Two pieces of different colors are allowed to race to
+        the same destination — whichever arrives first lands normally, and the later
+        arrival captures it on landing (resolved naturally by advance_time against
+        live board state). Only a same-color race to the same destination is blocked
+        here.
+
+        Every other square relationship — a target fleeing the square an attacker is
+        inbound to, an attacker targeting a square another piece is mid-departure
+        from, re-using an in-flight piece's own source — is governed by ordinary
+        occupancy rules via validate_move against the live board (which doesn't
+        change until a move actually resolves), or by the caller checking
+        piece.state != "idle". Blocking them here too would wrongly prevent a piece
+        from fleeing an incoming capture, which defeats the point of real-time play.
         """
         for activity in self.pending:
             if isinstance(activity, PendingMove):
-                if activity.frm == source:
-                    return True
                 if activity.to == destination and activity.piece.color == color:
                     return True
-                if activity.to == source or activity.frm == destination:
-                    return True
         return False
+
+    def _begin_rest(self, piece, duration_ms: int, state: str) -> PendingRest:
+        """Schedule a post-action cooldown and mark the piece as resting."""
+        rest = PendingRest(piece, self.clock_ms + duration_ms)
+        self.pending.append(rest)
+        piece.state = state
+        return rest
 
     @staticmethod
     def _move_duration_ms(frm: Position, to: Position) -> int:
@@ -92,19 +110,25 @@ class RealTimeArbiter:
         List[PendingMove],
         List[PendingMove],
         List[PendingJump],
+        List[PendingRest],
         List[PendingMove],
     ]:
         """Advance the clock by ms milliseconds and resolve all due motions.
 
-        Returns a tuple of four lists:
+        Returns a tuple of five lists:
         - intercepted_moves: moves stopped by an enemy jump at the destination.
-        - finished_moves: moves that completed a normal landing.
-        - finished_jumps: jumps that completed and released their cell.
+        - finished_moves: moves that completed a normal landing (piece then begins
+          a long_rest cooldown, scheduled internally).
+        - finished_jumps: jumps that completed and released their cell (piece then
+          begins a short_rest cooldown, scheduled internally).
+        - finished_rests: cooldowns that completed; the piece is already back to
+          "idle" by the time this returns.
         - failed_friend_moves: moves blocked by a friendly jump at the destination.
         """
         intercepted_moves = []
         finished_moves = []
         finished_jumps = []
+        finished_rests = []
         failed_friend_moves = []
 
         target_time = self.clock_ms + ms
@@ -114,6 +138,7 @@ class RealTimeArbiter:
 
             due_moves = []
             due_jumps = []
+            due_rests = []
 
             for act in list(self.pending):
                 if act.end_time_ms <= self.clock_ms:
@@ -121,6 +146,8 @@ class RealTimeArbiter:
                         due_moves.append(act)
                     elif isinstance(act, PendingJump):
                         due_jumps.append(act)
+                    elif isinstance(act, PendingRest):
+                        due_rests.append(act)
 
             for move in due_moves:
                 defender_status = self.status.get(move.to)
@@ -137,11 +164,19 @@ class RealTimeArbiter:
                     finished_moves.append(move)
                     if move in self.pending:
                         self.pending.remove(move)
+                    self._begin_rest(move.piece, LONG_REST_DURATION_MILLISECONDS, "long_rest")
 
             for jump in due_jumps:
                 finished_jumps.append(jump)
                 self.status.pop(jump.pos, None)
                 if jump in self.pending:
                     self.pending.remove(jump)
+                self._begin_rest(jump.piece, SHORT_REST_DURATION_MILLISECONDS, "short_rest")
 
-        return intercepted_moves, finished_moves, finished_jumps, failed_friend_moves
+            for rest in due_rests:
+                finished_rests.append(rest)
+                rest.piece.state = "idle"
+                if rest in self.pending:
+                    self.pending.remove(rest)
+
+        return intercepted_moves, finished_moves, finished_jumps, finished_rests, failed_friend_moves

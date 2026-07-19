@@ -2,7 +2,7 @@ import pytest
 from model.position import Position
 from model.piece import Piece
 from model.constants import PieceColor, PieceKind
-from realtime.motion import PendingMove, PendingJump
+from realtime.motion import PendingMove, PendingJump, PendingRest
 
 
 def test_pending_move_fields():
@@ -39,3 +39,15 @@ def test_pending_move_distinct_from_pending_jump():
 
     assert not isinstance(move, PendingJump)
     assert not isinstance(jump, PendingMove)
+
+
+def test_pending_rest_fields():
+    """PendingRest stores piece and end time."""
+    piece = Piece(id="wR_1", kind=PieceKind.ROOK, color=PieceColor.WHITE)
+
+    rest = PendingRest(piece=piece, end_time_ms=2000)
+
+    assert rest.piece is piece
+    assert rest.end_time_ms == 2000
+    assert not isinstance(rest, PendingMove)
+    assert not isinstance(rest, PendingJump)

@@ -25,3 +25,11 @@ class Jumping:
 
     def __init__(self, jump: PendingJump):
         self.jump = jump
+
+
+class PendingRest:
+    """Post-action cooldown during which the piece cannot initiate a new move or jump."""
+
+    def __init__(self, piece, end_time_ms: int):
+        self.piece = piece
+        self.end_time_ms = end_time_ms

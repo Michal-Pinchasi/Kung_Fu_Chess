@@ -37,3 +37,9 @@ class Layout:
     MOVE_TEXT_LINE_HEIGHT = 20
     MOVE_TEXT_COLOR       = (255, 255, 255, 255)
     MOVE_FONT_SIZE        = 0.45
+
+    # Score line at the bottom of each move-history panel.
+    SCORE_FONT_SIZE      = 0.7
+    SCORE_TEXT_COLOR     = (0, 215, 255, 255)   # gold — stands out from the move list
+    SCORE_TEXT_THICKNESS = 2
+    SCORE_BOTTOM_MARGIN  = 35                    # px from the panel's bottom edge

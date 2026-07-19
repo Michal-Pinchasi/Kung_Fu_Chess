@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "view", "ui")))
@@ -121,3 +122,53 @@ def test_idle_state_always_uses_frame_one(monkeypatch):
 
     assert "Rwidle1" in renderer._cache
     assert not any(key.startswith("Rwidle") and key != "Rwidle1" for key in renderer._cache)
+
+
+def _make_pieces_dir_with_n_frames(tmp_path, kind: str, color_letter: str, state_folder: str, n: int) -> str:
+    """Build a fake pieces_dir with exactly n numbered sprite files for one piece+state."""
+    real_sprite = os.path.join(_PIECES_DIR, "RW", "states", "move", "sprites", "1.png")
+    sprites_dir = tmp_path / f"{kind}{color_letter}" / "states" / state_folder / "sprites"
+    sprites_dir.mkdir(parents=True)
+    for i in range(1, n + 1):
+        shutil.copy(real_sprite, sprites_dir / f"{i}.png")
+    return str(tmp_path)
+
+
+def test_frame_count_is_derived_from_files_actually_present(monkeypatch, tmp_path):
+    """Cycling wraps at however many sprite files exist for THIS piece+state, not a fixed 5."""
+    monkeypatch.setattr(Img, "draw_on", lambda self, other_img, dx, dy: None)
+
+    pieces_dir = _make_pieces_dir_with_n_frames(tmp_path, "R", "W", "move", n=3)
+    renderer = PieceRenderer(pieces_dir)
+    frame = Img()
+
+    # With a global fixed count of 5, elapsed=300ms would be frame 4.
+    # With the real per-folder count of 3, it wraps back to frame 1.
+    renderer.draw(frame, _snapshot_with_state("moving", 300))
+
+    assert "Rwmoving1" in renderer._cache
+    assert "Rwmoving4" not in renderer._cache
+
+
+def test_frame_count_differs_between_two_states_of_the_same_piece(monkeypatch, tmp_path):
+    """Two states of the same piece can have independently-sized frame cycles."""
+    monkeypatch.setattr(Img, "draw_on", lambda self, other_img, dx, dy: None)
+
+    real_sprite = os.path.join(_PIECES_DIR, "RW", "states", "move", "sprites", "1.png")
+    move_dir = tmp_path / "RW" / "states" / "move" / "sprites"
+    jump_dir = tmp_path / "RW" / "states" / "jump" / "sprites"
+    move_dir.mkdir(parents=True)
+    jump_dir.mkdir(parents=True)
+    for i in range(1, 3):   # move: 2 frames
+        shutil.copy(real_sprite, move_dir / f"{i}.png")
+    for i in range(1, 5):   # jump: 4 frames
+        shutil.copy(real_sprite, jump_dir / f"{i}.png")
+
+    renderer = PieceRenderer(str(tmp_path))
+    frame = Img()
+
+    renderer.draw(frame, _snapshot_with_state("moving", 100))  # 100ms -> frame 2, then would wrap
+    renderer.draw(frame, _snapshot_with_state("jump", 100))    # 100ms -> frame 2, still within 4
+
+    assert renderer._frame_count("R", "w", "moving") == 2
+    assert renderer._frame_count("R", "w", "jump") == 4
