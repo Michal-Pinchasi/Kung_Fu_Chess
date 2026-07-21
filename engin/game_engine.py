@@ -8,6 +8,11 @@ from rules.rule_engine import RuleEngine
 from realtime.real_time_arbiter import RealTimeArbiter
 from input.controller import Controller
 from config.config_loader import EMPTY_SQUARE
+from events.message_bus import MessageBus
+from events.game_events import (
+    MOVE_STARTED, JUMP_STARTED, MOVE_COMPLETED, SCORE_CHANGED, GAME_OVER,
+    MoveStartedEvent, JumpStartedEvent, MoveCompletedEvent, ScoreChangedEvent, GameOverEvent,
+)
 
 
 @dataclass(frozen=True)
@@ -26,19 +31,40 @@ class GameEngine:
     RealTimeArbiter.
 
     Supports dependency injection for RealTimeArbiter to allow easy
-    substitution in tests.
+    substitution in tests. Also accepts an optional MessageBus: when
+    provided, GameEngine publishes MOVE_STARTED/JUMP_STARTED/MOVE_COMPLETED/
+    SCORE_CHANGED/GAME_OVER events (see events.game_events) at the moments
+    they happen, without knowing or caring who — if anyone — is subscribed.
+    When no bus is injected, publishing is a no-op and behavior is identical
+    to before the bus existed.
 
     Does not contain piece-specific movement logic, pixel mapping,
     rendering code, or script parsing.
     """
 
-    def __init__(self, board, arbiter: Optional[RealTimeArbiter] = None):
+    def __init__(
+        self,
+        board,
+        arbiter: Optional[RealTimeArbiter] = None,
+        message_bus: Optional[MessageBus] = None,
+    ):
         self.board = board
         self.game_state = GameState(board)
         self.arbiter = arbiter if arbiter is not None else RealTimeArbiter(board)
         self.controller = Controller(self)
         self.move_history = MoveHistory()
         self.score = Score()
+        self.bus = message_bus
+
+    def _publish(self, event_type: str, payload=None) -> None:
+        """Publish event_type via the injected message bus, if any (no-op otherwise).
+
+        Lets GameEngine announce things happened (a move started/landed, the
+        score changed, the game ended) without knowing or caring whether
+        anything is actually listening.
+        """
+        if self.bus is not None:
+            self.bus.publish(event_type, payload)
 
 
     def is_cell_empty(self, position: Position) -> bool:
@@ -86,6 +112,10 @@ class GameEngine:
             return MoveResult(False, validation.reason)
 
         self.arbiter.schedule_move(piece, source, destination)
+        self._publish(MOVE_STARTED, MoveStartedEvent(
+            piece_id=piece.id, kind=piece.kind.value, color=piece.color.value,
+            source=source, destination=destination,
+        ))
         return MoveResult(True, "ok")
 
     def request_jump(self, position: Position) -> MoveResult:
@@ -96,6 +126,10 @@ class GameEngine:
             return MoveResult(False, "motion_in_progress")
 
         self.arbiter.schedule_jump(piece, position)
+        self._publish(JUMP_STARTED, JumpStartedEvent(
+            piece_id=piece.id, kind=piece.kind.value, color=piece.color.value,
+            position=position,
+        ))
         return MoveResult(True, "ok")
 
     def wait(self, ms: int) -> None:
@@ -164,13 +198,24 @@ class GameEngine:
                 move.piece.kind.value, is_capture
             )
 
+            self._publish(MOVE_COMPLETED, MoveCompletedEvent(
+                piece_id=move.piece.id, kind=move.piece.kind.value, color=move.piece.color.value,
+                source=move.frm, destination=move.to, is_capture=is_capture,
+            ))
+
     def _process_game_logic(self, captured_pieces) -> None:
         """Credit score for this tick's captures and check the win condition."""
         self._credit_captures(captured_pieces)
 
+        if captured_pieces:
+            self._publish(SCORE_CHANGED, ScoreChangedEvent(
+                white_score=self.score.white_score, black_score=self.score.black_score,
+            ))
+
         if RuleEngine.check_king_capture(captured_pieces):
             self.game_state.is_game_over = True
             self.game_state.winner = RuleEngine.get_game_winner(self.board)
+            self._publish(GAME_OVER, GameOverEvent(winner=self.game_state.winner))
 
     def _credit_captures(self, captured_pieces) -> None:
         """Award score points for every piece captured this tick."""

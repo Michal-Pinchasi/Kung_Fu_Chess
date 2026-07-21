@@ -7,6 +7,10 @@ from engin.game_engine import GameEngine, MoveResult
 from config.config_loader import (
     JUMP_DURATION_MILLISECONDS, LONG_REST_DURATION_MILLISECONDS, SHORT_REST_DURATION_MILLISECONDS,
 )
+from events.message_bus import MessageBus
+from events.game_events import (
+    MOVE_STARTED, JUMP_STARTED, MOVE_COMPLETED, SCORE_CHANGED, GAME_OVER,
+)
 
 
 def _board_with_rook():
@@ -485,3 +489,130 @@ def test_snapshot_returns_correct_data():
     assert snap.pieces[0].color == "w"
     assert snap.pieces[0].kind == "R"
     assert snap.game_over is False
+
+
+def test_move_started_event_published_on_request_move():
+    board, rook = _board_with_rook()
+    bus = MessageBus()
+    received = []
+    bus.subscribe(MOVE_STARTED, received.append)
+    engine = GameEngine(board, message_bus=bus)
+
+    engine.request_move(Position(0, 0), Position(0, 5))
+
+    assert len(received) == 1
+    event = received[0]
+    assert event.piece_id == rook.id
+    assert event.kind == "R"
+    assert event.color == "w"
+    assert event.source == Position(0, 0)
+    assert event.destination == Position(0, 5)
+
+
+def test_move_started_not_published_when_move_rejected():
+    board, rook = _board_with_rook()
+    bus = MessageBus()
+    received = []
+    bus.subscribe(MOVE_STARTED, received.append)
+    engine = GameEngine(board, message_bus=bus)
+
+    engine.request_move(Position(0, 0), Position(3, 3))  # illegal diagonal for a rook
+
+    assert received == []
+
+
+def test_jump_started_event_published_on_request_jump():
+    board = Board(4, 4)
+    king = Piece(id="wK_1", kind=PieceKind.KING, color=PieceColor.WHITE)
+    board.add_piece(1, 1, king)
+    bus = MessageBus()
+    received = []
+    bus.subscribe(JUMP_STARTED, received.append)
+    engine = GameEngine(board, message_bus=bus)
+
+    engine.request_jump(Position(1, 1))
+
+    assert len(received) == 1
+    event = received[0]
+    assert event.piece_id == king.id
+    assert event.color == "w"
+    assert event.position == Position(1, 1)
+
+
+def test_move_completed_event_published_on_landing():
+    board, rook = _board_with_rook()
+    bus = MessageBus()
+    received = []
+    bus.subscribe(MOVE_COMPLETED, received.append)
+    engine = GameEngine(board, message_bus=bus)
+
+    engine.request_move(Position(0, 0), Position(0, 5))
+    engine.wait(5000)
+
+    assert len(received) == 1
+    event = received[0]
+    assert event.piece_id == rook.id
+    assert event.source == Position(0, 0)
+    assert event.destination == Position(0, 5)
+    assert event.is_capture is False
+
+
+def test_score_changed_event_published_on_capture():
+    board = Board(4, 4)
+    rook = Piece(id="wR_1", kind=PieceKind.ROOK, color=PieceColor.WHITE)
+    enemy = Piece(id="bQ_1", kind=PieceKind.QUEEN, color=PieceColor.BLACK)
+    board.add_piece(0, 0, rook)
+    board.add_piece(0, 3, enemy)
+    bus = MessageBus()
+    received = []
+    bus.subscribe(SCORE_CHANGED, received.append)
+    engine = GameEngine(board, message_bus=bus)
+
+    engine.request_move(Position(0, 0), Position(0, 3))
+    engine.wait(3000)
+
+    assert len(received) == 1
+    assert received[0].white_score == 9
+    assert received[0].black_score == 0
+
+
+def test_score_changed_not_published_without_capture():
+    board, rook = _board_with_rook()
+    bus = MessageBus()
+    received = []
+    bus.subscribe(SCORE_CHANGED, received.append)
+    engine = GameEngine(board, message_bus=bus)
+
+    engine.request_move(Position(0, 0), Position(0, 5))
+    engine.wait(5000)
+
+    assert received == []
+
+
+def test_game_over_event_published_on_king_capture():
+    board = Board(4, 4)
+    rook = Piece(id="wR_1", kind=PieceKind.ROOK, color=PieceColor.WHITE)
+    w_king = Piece(id="wK_1", kind=PieceKind.KING, color=PieceColor.WHITE)
+    b_king = Piece(id="bK_1", kind=PieceKind.KING, color=PieceColor.BLACK)
+    board.add_piece(0, 0, rook)
+    board.add_piece(3, 3, w_king)
+    board.add_piece(0, 3, b_king)
+    bus = MessageBus()
+    received = []
+    bus.subscribe(GAME_OVER, received.append)
+    engine = GameEngine(board, message_bus=bus)
+
+    engine.request_move(Position(0, 0), Position(0, 3))
+    engine.wait(3000)
+
+    assert len(received) == 1
+    assert received[0].winner == "WHITE"
+
+
+def test_engine_without_bus_does_not_raise():
+    """GameEngine with no message_bus injected behaves exactly as before — no crash on publish."""
+    board, rook = _board_with_rook()
+    engine = GameEngine(board)  # no message_bus
+
+    engine.request_move(Position(0, 0), Position(0, 5))
+    engine.wait(5000)  # must not raise despite internal _publish calls
