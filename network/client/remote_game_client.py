@@ -20,10 +20,15 @@ class RemoteGameClient:
     def __init__(self, uri: str = "ws://localhost:8765"):
         self.uri = uri
         self.color = None
+        self.username = None
+        self.rating = None
+        self.token = None
+        self.game_result = None
         self.error = None
         self._snapshot = None
         self._lock = threading.Lock()
         self._connected = threading.Event()
+        self._authenticated = threading.Event()
         self._closed = threading.Event()
         self._stop = threading.Event()
         self._outgoing = queue.Queue()
@@ -42,6 +47,19 @@ class RemoteGameClient:
         """Wait until the server assigned a color or reported an error."""
         self._connected.wait(timeout)
         return self.color is not None and self.error is None
+
+    def authenticate(self, username: str, password: str, register: bool = False) -> None:
+        """Submit credentials from the graphical login screen."""
+        self.error = None
+        self._authenticated.clear()
+        self._outgoing.put(json.dumps({
+            "type": "auth", "mode": "register" if register else "login",
+            "username": username, "password": password,
+        }))
+
+    def wait_for_authentication(self, timeout: float = 5.0) -> bool:
+        self._authenticated.wait(timeout)
+        return self.username is not None and self.error is None
 
     def latest_snapshot(self):
         with self._lock:
@@ -99,12 +117,23 @@ class RemoteGameClient:
             if message["type"] == "assigned_color":
                 self.color = message["color"]
                 self._connected.set()
+            elif message["type"] == "auth_result":
+                self.username = message["username"]
+                self.rating = message["rating"]
+                self.token = message["token"]
+                self._authenticated.set()
             elif message["type"] == "snapshot":
                 with self._lock:
                     self._snapshot = deserialize(message["data"])
             elif message["type"] == "error":
                 self.error = message["reason"]
                 self._connected.set()
+            elif message["type"] == "auth_error":
+                self.error = message["reason"]
+                self._authenticated.set()
+            elif message["type"] == "game_result":
+                self.game_result = message
+                self.rating = message["rating"]
 
     async def _send(self, websocket) -> None:
         while not self._stop.is_set():

@@ -13,16 +13,23 @@ socket leaks between tests.
 
 import asyncio
 import json
+import tempfile
+from dataclasses import replace
 
 import pytest
 import websockets
 
 from network.websocket_server import GameServer
+from config.multiplayer_settings import load_settings
+from events.game_events import GameOverEvent
 
 
 async def _start_server(tick_ms: int = 50) -> GameServer:
     """Start a GameServer on an ephemeral local port and return it once bound."""
-    server = GameServer(host="localhost", port=0, tick_ms=tick_ms)
+    tempdir = tempfile.TemporaryDirectory()
+    settings = replace(load_settings(), database_path=f"{tempdir.name}/test.sqlite3")
+    server = GameServer(host="localhost", port=0, tick_ms=tick_ms, settings=settings)
+    server._tempdir = tempdir
     server._start_task = asyncio.create_task(server.start())
 
     for _ in range(100):
@@ -39,6 +46,7 @@ async def _stop_server(server: GameServer) -> None:
         await server._start_task
     except asyncio.CancelledError:
         pass
+    server._tempdir.cleanup()
 
 
 async def _recv_json(connection) -> dict:
@@ -59,18 +67,23 @@ async def _recv_type(connection, message_type: str) -> dict:
             return message
 
 
+async def _authenticate(connection, username: str) -> None:
+    await connection.send(json.dumps({"type": "auth", "mode": "register", "username": username, "password": "password"}))
+    assert (await _recv_type(connection, "auth_result"))["username"] == username
+    await _recv_type(connection, "assigned_color")
+
+
 def test_first_and_second_client_assigned_white_and_black():
     async def scenario():
         server = await _start_server()
         try:
             uri = f"ws://localhost:{server.bound_port}"
             async with websockets.connect(uri) as client_a:
-                first_message = await _recv_json(client_a)
-                assert first_message == {"type": "assigned_color", "color": "w"}
+                await _authenticate(client_a, "white")
+                assert server.sessions.color_for(next(iter(server._users))).value == "w"
 
                 async with websockets.connect(uri) as client_b:
-                    second_message = await _recv_json(client_b)
-                    assert second_message == {"type": "assigned_color", "color": "b"}
+                    await _authenticate(client_b, "black")
         finally:
             await _stop_server(server)
 
@@ -83,12 +96,59 @@ def test_third_client_rejected_when_game_full():
         try:
             uri = f"ws://localhost:{server.bound_port}"
             async with websockets.connect(uri) as client_a, websockets.connect(uri) as client_b:
-                await _recv_json(client_a)
-                await _recv_json(client_b)
+                await _authenticate(client_a, "white")
+                await _authenticate(client_b, "black")
 
                 async with websockets.connect(uri) as client_c:
-                    message = await _recv_json(client_c)
+                    await client_c.send(json.dumps({"type": "auth", "mode": "register", "username": "third", "password": "password"}))
+                    message = await _recv_type(client_c, "error")
                     assert message == {"type": "error", "reason": "game_full"}
+        finally:
+            await _stop_server(server)
+
+    asyncio.run(scenario())
+
+
+def test_registered_user_can_log_in_but_cannot_occupy_both_colors():
+    async def scenario():
+        server = await _start_server()
+        try:
+            uri = f"ws://localhost:{server.bound_port}"
+            async with websockets.connect(uri) as first, websockets.connect(uri) as second:
+                await _authenticate(first, "same-player")
+                await second.send(json.dumps({
+                    "type": "auth", "mode": "login", "username": "same-player", "password": "password",
+                }))
+                assert await _recv_type(second, "auth_error") == {
+                    "type": "auth_error", "reason": "user_already_in_game",
+                }
+        finally:
+            await _stop_server(server)
+
+    asyncio.run(scenario())
+
+
+def test_game_over_updates_database_and_notifies_both_players_once():
+    async def scenario():
+        server = await _start_server()
+        try:
+            uri = f"ws://localhost:{server.bound_port}"
+            async with websockets.connect(uri) as white, websockets.connect(uri) as black:
+                await _authenticate(white, "rated-white")
+                await _authenticate(black, "rated-black")
+
+                server._on_game_over(GameOverEvent(winner="WHITE"))
+                white_result = await _recv_type(white, "game_result")
+                black_result = await _recv_type(black, "game_result")
+
+                assert white_result == {"type": "game_result", "outcome": "win", "rating": 1216}
+                assert black_result == {"type": "game_result", "outcome": "loss", "rating": 1184}
+                assert server.repository.get_by_username("rated-white").wins == 1
+                assert server.repository.get_by_username("rated-black").losses == 1
+
+                server._on_game_over(GameOverEvent(winner="WHITE"))
+                await asyncio.sleep(0.05)
+                assert server.repository.get_by_username("rated-white").wins == 1
         finally:
             await _stop_server(server)
 
@@ -101,7 +161,7 @@ def test_legal_move_from_white_is_scheduled_and_broadcast():
         try:
             uri = f"ws://localhost:{server.bound_port}"
             async with websockets.connect(uri) as client_a:
-                await _recv_json(client_a)  # assigned_color
+                await _authenticate(client_a, "white")
 
                 await client_a.send("WPe2e4")  # white pawn, legal double-step
 
@@ -132,7 +192,7 @@ def test_command_for_opponent_piece_is_rejected():
         try:
             uri = f"ws://localhost:{server.bound_port}"
             async with websockets.connect(uri) as client_a:
-                await _recv_json(client_a)  # assigned White
+                await _authenticate(client_a, "white")
 
                 await client_a.send("BPe7e5")  # targets a real Black pawn's square
 
@@ -150,7 +210,7 @@ def test_malformed_command_returns_parse_error():
         try:
             uri = f"ws://localhost:{server.bound_port}"
             async with websockets.connect(uri) as client_a:
-                await _recv_json(client_a)  # assigned_color
+                await _authenticate(client_a, "white")
 
                 await client_a.send("not a real command")
 

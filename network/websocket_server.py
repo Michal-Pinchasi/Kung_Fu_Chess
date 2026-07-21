@@ -23,6 +23,11 @@ from events.game_events import GAME_OVER, GameOverEvent
 from network.session_manager import SessionManager
 from network.command_parser import CommandParser, CommandParseError, MoveCommand
 from network.snapshot_serializer import serialize
+from config.multiplayer_settings import load_settings
+from storage.user_repository import UserRepository
+from services.auth_service import AuthService, AuthError
+from services.elo_calculator import EloCalculator
+from services.game_result_service import GameResultService
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +52,8 @@ class GameServer:
     or ownership itself.
     """
 
-    def __init__(self, host: str = "localhost", port: int = 8765, tick_ms: int = 100):
+    def __init__(self, host: str = "localhost", port: int = 8765, tick_ms: int = 100,
+                 settings=None, repository=None):
         """Create a server that will listen on host:port once start() runs.
 
         Parameters
@@ -66,10 +72,17 @@ class GameServer:
         self.tick_ms = tick_ms
 
         self.bus = MessageBus()
+        self.settings = settings or load_settings()
+        self.repository = repository or UserRepository(self.settings.database_path)
+        self.repository.initialize()
+        self.auth = AuthService(self.repository, self.settings)
+        self.results = GameResultService(self.repository, EloCalculator(self.settings.elo))
         board = BoardParser.parse(_DEFAULT_BOARD)
         self.engine = GameEngine(board, message_bus=self.bus)
         self.sessions = SessionManager()
         self._connections: set = set()
+        self._users: dict = {}
+        self._ratings_applied = False
         self._server = None
 
         self.bus.subscribe(GAME_OVER, self._on_game_over)
@@ -102,20 +115,14 @@ class GameServer:
         Called once per incoming connection by the websockets library.
         Runs for the lifetime of that connection.
         """
-        color = self.sessions.assign_color(websocket)
-        if color is None:
-            await self._send(websocket, {"type": "error", "reason": "game_full"})
-            await websocket.close()
-            return
-
         self._connections.add(websocket)
-        await self._send(websocket, {"type": "assigned_color", "color": color.value})
 
         try:
             async for raw_message in websocket:
                 await self._handle_message(websocket, raw_message)
         finally:
             self.sessions.release(websocket)
+            self._users.pop(websocket, None)
             self._connections.discard(websocket)
 
     async def _handle_message(self, websocket, raw_message: str) -> None:
@@ -126,6 +133,10 @@ class GameServer:
         request. The engine is only ever touched once the command has
         parsed successfully and passed ownership authorization.
         """
+        if websocket not in self._users:
+            await self._handle_authentication(websocket, raw_message)
+            return
+
         try:
             command = CommandParser.parse(raw_message)
         except CommandParseError as error:
@@ -144,6 +155,32 @@ class GameServer:
 
         if not result.is_accepted:
             await self._send(websocket, {"type": "error", "reason": result.reason})
+
+    async def _handle_authentication(self, websocket, raw_message: str) -> None:
+        """Authenticate a socket before it receives a player color or game state."""
+        try:
+            message = json.loads(raw_message)
+            if message.get("type") != "auth":
+                raise AuthError("authentication_required")
+            username, password = message["username"], message["password"]
+            if message.get("mode") == "register":
+                self.auth.register(username, password)
+            user, token = self.auth.login(username, password)
+            if any(active_user.id == user.id for active_user in self._users.values()):
+                raise AuthError("user_already_in_game")
+            color = self.sessions.assign_color(websocket)
+            if color is None:
+                await self._send(websocket, {"type": "error", "reason": "game_full"})
+                return
+            self._users[websocket] = user
+            await self._send(websocket, {
+                "type": "auth_result", "username": user.username, "rating": user.rating, "token": token,
+            })
+            await self._send(websocket, {"type": "assigned_color", "color": color.value})
+            await self._send(websocket, {"type": "snapshot", "data": serialize(self.engine.snapshot())})
+        except (AuthError, KeyError, TypeError, json.JSONDecodeError) as error:
+            reason = str(error) if str(error) else "invalid_auth_request"
+            await self._send(websocket, {"type": "auth_error", "reason": reason})
 
     async def _tick_loop(self) -> None:
         """Advance simulated time and broadcast a fresh snapshot on a fixed interval."""
@@ -169,7 +206,26 @@ class GameServer:
         schedules the actual async broadcast as a background task rather
         than awaiting it directly.
         """
-        asyncio.create_task(self._broadcast_snapshot())
+        if not self._ratings_applied:
+            self._ratings_applied = True
+            asyncio.create_task(self._record_ratings_and_broadcast(event))
+        else:
+            asyncio.create_task(self._broadcast_snapshot())
+
+    async def _record_ratings_and_broadcast(self, event: GameOverEvent) -> None:
+        """Persist ELO once, then make the post-game ratings visible to both players."""
+        white_socket = next((ws for ws in self._users if self.sessions.color_for(ws)
+                             and self.sessions.color_for(ws).value == "w"), None)
+        black_socket = next((ws for ws in self._users if self.sessions.color_for(ws)
+                             and self.sessions.color_for(ws).value == "b"), None)
+        if white_socket is not None and black_socket is not None:
+            white, black = self._users[white_socket], self._users[black_socket]
+            white_outcome = "win" if event.winner == "WHITE" else "loss" if event.winner == "BLACK" else "draw"
+            white_rating, black_rating = self.results.record(white, black, white_outcome)
+            await self._send(white_socket, {"type": "game_result", "outcome": white_outcome, "rating": white_rating})
+            black_outcome = {"win": "loss", "loss": "win", "draw": "draw"}[white_outcome]
+            await self._send(black_socket, {"type": "game_result", "outcome": black_outcome, "rating": black_rating})
+        await self._broadcast_snapshot()
 
     async def _send(self, websocket, payload: dict) -> None:
         """Serialize payload to JSON and send it to a single client."""

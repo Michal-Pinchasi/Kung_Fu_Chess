@@ -1,0 +1,16 @@
+{
+  "database_path": "data/kung_fu_chess.sqlite3",
+  "elo": {
+    "starting_rating": 1200,
+    "k_factor": 32.0,
+    "rating_divisor": 400.0,
+    "base": 10.0
+  },
+  "password": {
+    "algorithm": "sha256",
+    "iterations": 210000,
+    "salt_bytes": 16,
+    "derived_key_bytes": 32
+  },
+  "session": {"token_bytes": 32}
+}
