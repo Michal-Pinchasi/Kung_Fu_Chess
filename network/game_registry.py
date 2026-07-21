@@ -8,15 +8,18 @@ from network.game_session import GameSession
 
 
 class GameRegistry:
-    def __init__(self, board_text: str, id_bytes: int = 12):
+    def __init__(self, board_text: str, id_bytes: int = 12, event_auditor=None):
         self.board_text = board_text
         self.id_bytes = id_bytes
         self._games: dict[str, GameSession] = {}
         self._by_user: dict[int, str] = {}
+        self.event_auditor = event_auditor
 
     def create(self, white, black, white_socket, black_socket) -> GameSession:
         game_id = secrets.token_urlsafe(self.id_bytes)
         bus = MessageBus()
+        if self.event_auditor:
+            self.event_auditor.attach(bus, game_id)
         engine = GameEngine(BoardParser.parse(self.board_text), message_bus=bus)
         game = GameSession(game_id, engine, white, black, white_socket, black_socket, bus)
         self._games[game_id] = game

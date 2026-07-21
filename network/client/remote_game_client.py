@@ -4,12 +4,15 @@ import asyncio
 import json
 import queue
 import threading
+import logging
+import os
 
 import websockets
 
 from config.multiplayer_settings import load_settings
 from network.client.connection_state import ConnectionState
 from network.snapshot_deserializer import deserialize
+from observability.logging_service import LoggingService
 
 
 class RemoteGameClient:
@@ -19,6 +22,8 @@ class RemoteGameClient:
         self.state = ConnectionState.CONNECTING
         self.color = self.username = self.rating = self.token = None
         self.game_id = self.opponent = self.game_result = self.error = None
+        self.room_id = self.role = None
+        self.room_members = []
         self.queue_timeout_seconds = None
         self.opponent_disconnect_seconds = None
         self.notification = None
@@ -29,11 +34,16 @@ class RemoteGameClient:
         self._stop = threading.Event()
         self._outgoing = queue.Queue()
         self._loop = self._websocket = self._thread = None
+        logging_service = LoggingService(self.settings.logging)
+        log_path = os.path.join(self.settings.logging.client_log_directory, f"client-{os.getpid()}-{id(self)}.log")
+        self.logger = logging_service.create_logger(f"kung_fu_chess.client.{id(self)}", log_path)
+        self._log_event = logging_service.event
 
     def connect(self):
         if self._thread is None:
             self._thread = threading.Thread(target=self._run, daemon=True, name="kung-fu-ws-client")
             self._thread.start()
+            self._log_event(self.logger, logging.INFO, "client_started", uri=self.uri)
 
     def authenticate(self, username, password, register=False):
         self.error = None
@@ -48,6 +58,24 @@ class RemoteGameClient:
         self._queue({"type": "join_queue"})
         return True
 
+    def create_room(self):
+        if self.state != ConnectionState.LOBBY:
+            return False
+        self._queue({"type": "create_room"})
+        return True
+
+    def join_room(self, room_id):
+        if self.state != ConnectionState.LOBBY or not room_id.strip():
+            return False
+        self._queue({"type": "join_room", "room_id": room_id.strip().upper()})
+        return True
+
+    def leave_room(self):
+        if self.state != ConnectionState.IN_ROOM:
+            return False
+        self._queue({"type": "leave_room"})
+        return True
+
     def leave_queue(self):
         if self.state != ConnectionState.SEARCHING:
             return False
@@ -59,7 +87,7 @@ class RemoteGameClient:
             return self._snapshot
 
     def send_command(self, command):
-        if self.state != ConnectionState.PLAYING or self._stop.is_set():
+        if self.state != ConnectionState.PLAYING or self.role == "spectator" or self._stop.is_set():
             return False
         self._outgoing.put(command)
         return True
@@ -93,6 +121,7 @@ class RemoteGameClient:
                 break
             self.state = ConnectionState.RECONNECTING
             self.notification = "Connection lost - reconnecting..."
+            self._log_event(self.logger, logging.WARNING, "reconnect_scheduled", game_id=self.game_id, delay=delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, self.settings.reconnect.maximum_delay_seconds)
 
@@ -125,6 +154,7 @@ class RemoteGameClient:
             self._authenticated.set()
         elif kind == "lobby_ready":
             self.state = ConnectionState.LOBBY
+            self._log_event(self.logger, logging.INFO, "lobby_ready", username=self.username)
         elif kind == "queue_joined":
             self.state = ConnectionState.SEARCHING
             self.queue_timeout_seconds = message["timeout_seconds"]
@@ -134,8 +164,22 @@ class RemoteGameClient:
             self.notification = "Search timed out." if kind == "matchmaking_timeout" else "Search cancelled."
         elif kind == "match_found":
             self.game_id, self.color, self.opponent = message["game_id"], message["color"], message["opponent"]
-            self.state, self.notification = ConnectionState.PLAYING, "Match found!"
+            self.room_id, self.role = message.get("room_id"), message.get("role")
+            next_state = ConnectionState.SPECTATING if self.role == "spectator" else ConnectionState.PLAYING
+            self.state, self.notification = next_state, "Match found!"
             self._last_sequence = -1
+            self._log_event(self.logger, logging.INFO, "match_found", game_id=self.game_id,
+                            room_id=self.room_id, role=self.role)
+        elif kind in ("room_created", "room_joined"):
+            self.room_id, self.role = message["room_id"], message["role"]
+            self.state = ConnectionState.IN_ROOM
+            self.notification = "Waiting for another player..." if self.role != "spectator" else "Spectator joined."
+            self._log_event(self.logger, logging.INFO, kind, room_id=self.room_id, role=self.role)
+        elif kind == "room_state":
+            self.room_id, self.room_members = message["room_id"], message["members"]
+        elif kind == "room_left":
+            self.room_id, self.role, self.room_members = None, None, []
+            self.state, self.notification = ConnectionState.LOBBY, "Room left."
         elif kind == "snapshot" and message.get("game_id") == self.game_id:
             if message["sequence"] > self._last_sequence:
                 with self._lock:
@@ -149,12 +193,16 @@ class RemoteGameClient:
         elif kind == "reconnect_success":
             self.username, self.rating = message["username"], message["rating"]
             self.color, self.game_id = message["color"], message["game_id"]
-            self.state, self.notification = ConnectionState.PLAYING, "Reconnected."
+            self.room_id, self.role = message.get("room_id"), message.get("role")
+            self.state = ConnectionState.SPECTATING if self.role == "spectator" else ConnectionState.PLAYING
+            self.notification = "Reconnected."
         elif kind == "game_result":
             self.game_result, self.rating = message, message["rating"]
             self.state = ConnectionState.GAME_OVER
-        elif kind in ("error", "auth_error", "matchmaking_error"):
+        elif kind in ("error", "auth_error", "matchmaking_error", "room_error"):
             self.error = message["reason"]
+            self.notification = message["reason"]
+            self._log_event(self.logger, logging.WARNING, kind, reason=message["reason"])
             if kind == "auth_error":
                 self._authenticated.set()
 

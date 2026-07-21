@@ -41,6 +41,23 @@ class ReconnectSettings:
 
 
 @dataclass(frozen=True)
+class RoomSettings:
+    player_capacity: int = 2
+    maximum_spectators: int = 20
+    room_id_bytes: int = 6
+    local_spectator_windows: int = 1
+
+
+@dataclass(frozen=True)
+class LoggingSettings:
+    server_log_path: str = "logs/server.log"
+    client_log_directory: str = "logs/clients"
+    level: str = "INFO"
+    maximum_file_bytes: int = 5_242_880
+    backup_count: int = 5
+
+
+@dataclass(frozen=True)
 class MultiplayerSettings:
     database_path: str
     elo: EloSettings
@@ -49,6 +66,8 @@ class MultiplayerSettings:
     matchmaking: MatchmakingSettings = field(default_factory=MatchmakingSettings)
     disconnect: DisconnectSettings = field(default_factory=DisconnectSettings)
     reconnect: ReconnectSettings = field(default_factory=ReconnectSettings)
+    rooms: RoomSettings = field(default_factory=RoomSettings)
+    logging: LoggingSettings = field(default_factory=LoggingSettings)
 
 
 def load_settings(config_path: str | None = None) -> MultiplayerSettings:
@@ -60,6 +79,8 @@ def load_settings(config_path: str | None = None) -> MultiplayerSettings:
     matchmaking = raw.get("matchmaking", {})
     disconnect = raw.get("disconnect", {})
     reconnect = raw.get("reconnect", {})
+    rooms = raw.get("rooms", {})
+    logging_settings = raw.get("logging", {})
     database_path = os.environ.get("KUNG_FU_CHESS_DB_PATH", raw["database_path"])
     return MultiplayerSettings(
         database_path=database_path,
@@ -83,5 +104,18 @@ def load_settings(config_path: str | None = None) -> MultiplayerSettings:
         reconnect=ReconnectSettings(
             initial_delay_seconds=float(reconnect.get("initial_delay_seconds", 0.5)),
             maximum_delay_seconds=float(reconnect.get("maximum_delay_seconds", 4)),
+        ),
+        rooms=RoomSettings(
+            player_capacity=int(os.environ.get("KUNG_FU_CHESS_ROOM_PLAYER_CAPACITY", rooms.get("player_capacity", 2))),
+            maximum_spectators=int(os.environ.get("KUNG_FU_CHESS_MAX_SPECTATORS", rooms.get("maximum_spectators", 20))),
+            room_id_bytes=int(rooms.get("room_id_bytes", 6)),
+            local_spectator_windows=int(rooms.get("local_spectator_windows", 1)),
+        ),
+        logging=LoggingSettings(
+            server_log_path=os.environ.get("KUNG_FU_CHESS_SERVER_LOG", logging_settings.get("server_log_path", "logs/server.log")),
+            client_log_directory=os.environ.get("KUNG_FU_CHESS_CLIENT_LOG_DIR", logging_settings.get("client_log_directory", "logs/clients")),
+            level=os.environ.get("KUNG_FU_CHESS_LOG_LEVEL", logging_settings.get("level", "INFO")),
+            maximum_file_bytes=int(logging_settings.get("maximum_file_bytes", 5_242_880)),
+            backup_count=int(logging_settings.get("backup_count", 5)),
         ),
     )

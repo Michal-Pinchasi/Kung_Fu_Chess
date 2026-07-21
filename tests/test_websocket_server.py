@@ -170,3 +170,36 @@ def test_disconnect_expiry_causes_single_rated_technical_forfeit():
         finally:
             await _stop_server(server)
     asyncio.run(scenario())
+
+
+def test_private_room_assigns_players_and_read_only_spectator():
+    async def scenario():
+        server = await _start_server()
+        try:
+            uri = f"ws://localhost:{server.bound_port}"
+            async with websockets.connect(uri) as first, websockets.connect(uri) as second, websockets.connect(uri) as viewer:
+                await _register(first, "room-white")
+                await _register(second, "room-black")
+                await _register(viewer, "room-viewer")
+
+                await first.send(json.dumps({"type": "create_room"}))
+                created = await _recv_type(first, "room_created")
+                assert created["role"] == "white"
+
+                await second.send(json.dumps({"type": "join_room", "room_id": created["room_id"]}))
+                assert (await _recv_type(second, "room_joined"))["role"] == "black"
+                first_match = await _recv_type(first, "match_found")
+                await _recv_type(second, "match_found")
+
+                await viewer.send(json.dumps({"type": "join_room", "room_id": created["room_id"]}))
+                assert (await _recv_type(viewer, "room_joined"))["role"] == "spectator"
+                viewer_match = await _recv_type(viewer, "match_found")
+                assert viewer_match["game_id"] == first_match["game_id"]
+                assert viewer_match["color"] is None
+                await _recv_type(viewer, "snapshot")
+
+                await viewer.send("WPe2e4")
+                assert (await _recv_type(viewer, "error"))["reason"] == "spectator_read_only"
+        finally:
+            await _stop_server(server)
+    asyncio.run(scenario())

@@ -142,6 +142,17 @@ class TestBoardRenderer:
         renderer.draw(frame)   # must not raise
 
 
+class TestRoomScreenRenderer:
+
+    def test_draw_modifies_frame(self):
+        from view.ui.window.game_canvas import GameCanvas
+        from view.ui.rendering.room_screen_renderer import RoomScreenRenderer
+        frame = GameCanvas(_BG_PATH).fresh_frame()
+        before = frame.img.copy()
+        RoomScreenRenderer().draw(frame, "michal", 1200, "Choose how to play")
+        assert not np.array_equal(frame.img, before)
+
+
 # ── OverlayRenderer ─────────────────────────────────────────────────────────
 
 class TestOverlayRenderer:

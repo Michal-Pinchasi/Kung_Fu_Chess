@@ -25,5 +25,18 @@
   "reconnect": {
     "initial_delay_seconds": 0.5,
     "maximum_delay_seconds": 4
+  },
+  "rooms": {
+    "player_capacity": 2,
+    "maximum_spectators": 20,
+    "room_id_bytes": 6,
+    "local_spectator_windows": 1
+  },
+  "logging": {
+    "server_log_path": "logs/server.log",
+    "client_log_directory": "logs/clients",
+    "level": "INFO",
+    "maximum_file_bytes": 5242880,
+    "backup_count": 5
   }
 }

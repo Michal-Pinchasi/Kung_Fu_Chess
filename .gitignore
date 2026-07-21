@@ -58,3 +58,8 @@ src/testTestingRootWkspc/coverageWorkspace/.coverage
 ai-artifacts/*
 *.vsix
 .vscode/*
+
+# Runtime audit and launcher output
+logs/
+launcher-out.log
+launcher-error.log

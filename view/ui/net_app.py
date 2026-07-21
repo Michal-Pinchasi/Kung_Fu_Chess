@@ -21,6 +21,7 @@ from view.ui.rendering.board_renderer import BoardRenderer
 from view.ui.rendering.move_history_renderer import MoveHistoryRenderer
 from view.ui.rendering.overlay_renderer import OverlayRenderer
 from view.ui.rendering.piece_renderer import PieceRenderer
+from view.ui.rendering.room_screen_renderer import RoomScreenRenderer
 from view.ui.scene.game_scene import GameScene
 from view.ui.window.game_canvas import GameCanvas
 
@@ -52,7 +53,8 @@ def app(uri: str = "ws://localhost:8765", window_name: str | None = None) -> Non
                       MoveHistoryRenderer())
     first_frame = scene.render()
     cv2.imshow(title, first_frame.img)
-    MouseHandler(engine.controller).register(title)
+    if client.role != "spectator":
+        MouseHandler(engine.controller).register(title)
 
     try:
         while True:
@@ -73,6 +75,15 @@ def _login_screen(client: RemoteGameClient, canvas: GameCanvas, title: str) -> b
     """A keyboard-driven graphical login/register screen inside the game window."""
     username, password, active_field = "", "", 0
     register_mode, submitted = False, False
+    mode_clicked = [False]
+    mode_box = (500, 610, 340, 55)
+
+    def on_mouse(event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            box_x, box_y, box_w, box_h = mode_box
+            mode_clicked[0] = box_x <= x <= box_x + box_w and box_y <= y <= box_y + box_h
+
+    cv2.setMouseCallback(title, on_mouse)
     while True:
         frame = canvas.fresh_frame()
         frame.draw_rect(260, 180, 780, 550, color=(20, 20, 20, 255), alpha=0.88)
@@ -81,20 +92,23 @@ def _login_screen(client: RemoteGameClient, canvas: GameCanvas, title: str) -> b
         _field(frame, "Username", username, 430, 380, active_field == 0)
         _field(frame, "Password", "*" * len(password), 430, 490, active_field == 1)
         action = "REGISTER" if register_mode else "LOGIN"
-        frame.put_text(f"ENTER: {action}   TAB: next field   R: switch mode   ESC: exit", 355, 640, 0.55)
+        frame.draw_rect(*mode_box, color=(40, 215, 255, 255), thickness=2)
+        frame.put_text(f"CLICK: switch to {'LOGIN' if register_mode else 'REGISTER'}", 535, 647, 0.5)
+        frame.put_text(f"ENTER: {action}   TAB: next field   ESC: exit", 420, 700, 0.55)
         if submitted:
             status = client.error or "Connecting..."
             color = (0, 0, 255, 255) if client.error else (0, 220, 255, 255)
             frame.put_text(status, 430, 585, 0.65, color=color, thickness=2)
         cv2.imshow(title, frame.img)
-        key = cv2.waitKey(1000 // FPS) & 0xFF
-        if key in (27, ord("q")):
+        key = cv2.waitKeyEx(1000 // FPS)
+        if key == 27:
             return False
         if client.username is not None and client.state == ConnectionState.LOBBY:
             return True
         if key == 9:
             active_field = 1 - active_field
-        elif key in (ord("r"), ord("R")):
+        elif mode_clicked[0]:
+            mode_clicked[0] = False
             register_mode, submitted, client.error = not register_mode, False, None
         elif key in (8, 127):
             if active_field == 0:
@@ -119,42 +133,57 @@ def _field(frame, label: str, value: str, x: int, y: int, active: bool) -> None:
 
 
 def _matchmaking_screen(client: RemoteGameClient, canvas: GameCanvas, title: str) -> bool:
-    """Lobby and queue presentation; network state remains owned by the client."""
-    action_clicked = [False]
-    action_box = (450, 470, 430, 80)
+    """Room menu and queue presentation; network state remains owned by the client."""
+    clicked_action = [None]
+    join_mode, room_code = False, ""
+    renderer = RoomScreenRenderer()
 
     def on_mouse(event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
-            box_x, box_y, box_w, box_h = action_box
-            action_clicked[0] = box_x <= x <= box_x + box_w and box_y <= y <= box_y + box_h
+            for action, box in renderer.action_boxes.items():
+                box_x, box_y, box_w, box_h = box
+                if box_x <= x <= box_x + box_w and box_y <= y <= box_y + box_h:
+                    clicked_action[0] = action
 
     cv2.setMouseCallback(title, on_mouse)
     while True:
         frame = canvas.fresh_frame()
-        frame.draw_rect(280, 190, 740, 430, color=(20, 20, 20, 255), alpha=0.88)
-        frame.put_text(f"Welcome {client.username}", 450, 285, 1.0,
-                       color=(40, 215, 255, 255), thickness=2)
-        frame.put_text(f"ELO: {client.rating}", 560, 345, 0.8, thickness=2)
         searching = client.state == ConnectionState.SEARCHING
-        instruction = "ENTER: CANCEL SEARCH" if searching else "ENTER: PLAY"
-        frame.put_text(client.notification or "Ready to play", 450, 430, 0.75, thickness=2)
-        frame.draw_rect(*action_box, color=(40, 215, 255, 255), thickness=2)
-        frame.put_text(instruction, 475, 520, 0.72, thickness=2)
-        frame.put_text("ESC: exit", 570, 565, 0.55)
+        in_room = client.state == ConnectionState.IN_ROOM
+        status = client.notification or "Choose how to play"
+        if in_room:
+            status = f"ROOM: {client.room_id} | {client.role.upper()} | Waiting for player..."
+        elif join_mode:
+            status = f"ROOM ID: {room_code}_"
+        renderer.draw(frame, client.username, client.rating, status)
         cv2.imshow(title, frame.img)
         key = cv2.waitKeyEx(1000 // FPS)
-        if client.state == ConnectionState.PLAYING:
+        if client.state in (ConnectionState.PLAYING, ConnectionState.SPECTATING):
             return True
         if key in (27, ord("q"), ord("Q")):
             return False
-        if action_clicked[0] or key in (10, 13, 32, ord("p"), ord("P")):
-            action_clicked[0] = False
+        action, clicked_action[0] = clicked_action[0], None
+        if join_mode:
+            if key in (8, 127):
+                room_code = room_code[:-1]
+            elif key in (10, 13) and room_code:
+                client.join_room(room_code)
+                join_mode = False
+            elif 32 <= key <= 126 and chr(key).isalnum():
+                room_code += chr(key).upper()
+        elif action == "join" or key in (ord("j"), ord("J")):
+            join_mode, room_code = True, ""
+        elif action == "create" or key in (ord("c"), ord("C")):
+            client.create_room()
+        elif key in (ord("l"), ord("L")) and in_room:
+            client.leave_room()
+        elif action == "quick" or key in (10, 13, 32, ord("p"), ord("P")):
             client.leave_queue() if searching else client.join_queue()
 
 
 def _draw_account_status(frame, client: RemoteGameClient) -> None:
     """Keep the authenticated identity and persisted rating visible in-game."""
-    color_name = "WHITE" if client.color == "w" else "BLACK"
+    color_name = "SPECTATOR" if client.role == "spectator" else "WHITE" if client.color == "w" else "BLACK"
     frame.draw_rect(20, 20, 315, 75, color=(20, 20, 20, 255), alpha=0.75)
     frame.put_text(f"{client.username} | {color_name} | ELO {client.rating}", 35, 65, 0.58,
                    color=(255, 255, 255, 255), thickness=2)
@@ -182,9 +211,12 @@ def _draw_game_over_result(renderer: OverlayRenderer, frame, client: RemoteGameC
     if not client.game_result:
         return
     outcome = client.game_result["outcome"]
+    winner = client.game_result.get("winner")
     if outcome == "draw":
         renderer.draw_match_result(frame, None, None, is_draw=True)
         return
+    elif winner:
+        winner_name, winner_color = winner["username"], winner["color"]
     elif outcome == "win":
         winner_name = client.username
         winner_color = "WHITE" if client.color == "w" else "BLACK"

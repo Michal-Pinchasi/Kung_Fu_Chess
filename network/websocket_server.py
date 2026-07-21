@@ -17,8 +17,11 @@ from services.auth_service import AuthError, AuthService
 from services.elo_calculator import EloCalculator
 from services.game_result_service import GameResultService
 from storage.user_repository import UserRepository
-
-logger = logging.getLogger(__name__)
+from rooms.room_manager import RoomManager
+from rooms.room_role import RoomRole
+from rooms.game_room import RoomState
+from observability.logging_service import LoggingService
+from observability.game_event_auditor import GameEventAuditor
 
 _DEFAULT_BOARD = """\
 wR wN wB wQ wK wB wN wR
@@ -43,7 +46,12 @@ class GameServer:
         self.results = GameResultService(self.repository, EloCalculator(self.settings.elo))
         mm = self.settings.matchmaking
         self.matchmaking = MatchmakingManager(mm.elo_range, mm.queue_timeout_seconds)
-        self.games = GameRegistry(_DEFAULT_BOARD)
+        logging_service = LoggingService(self.settings.logging)
+        self.logger = logging_service.create_logger("kung_fu_chess.server", self.settings.logging.server_log_path)
+        self._log_event = logging_service.event
+        self.games = GameRegistry(_DEFAULT_BOARD,
+                                  event_auditor=GameEventAuditor(self.logger, self._log_event))
+        self.rooms = RoomManager(self.settings.rooms)
         self.disconnects = DisconnectManager(self.settings.disconnect.grace_period_seconds)
         self._users: dict[object, object] = {}
         self._tokens: dict[object, str] = {}
@@ -57,17 +65,19 @@ class GameServer:
     async def start(self):
         async with websockets.serve(self._handle_connection, self.host, self.port) as server:
             self._server = server
-            logger.info("GameServer listening on %s:%d", self.host, self.bound_port)
+            self._log_event(self.logger, logging.INFO, "server_started", host=self.host, port=self.bound_port)
             await self._tick_loop()
 
     async def _handle_connection(self, websocket):
         self._connections.add(websocket)
+        self._log_event(self.logger, logging.INFO, "connection_opened", connection_id=id(websocket))
         try:
             async for raw in websocket:
                 await self._handle_message(websocket, raw)
         finally:
             await self._handle_disconnect(websocket)
             self._connections.discard(websocket)
+            self._log_event(self.logger, logging.INFO, "connection_closed", connection_id=id(websocket))
 
     async def _handle_message(self, websocket, raw):
         if websocket not in self._users:
@@ -83,6 +93,12 @@ class GameServer:
                 await self._join_queue(websocket)
             elif action == "leave_queue":
                 await self._leave_queue(websocket)
+            elif action == "create_room":
+                await self._create_room(websocket)
+            elif action == "join_room":
+                await self._join_room(websocket, message)
+            elif action == "leave_room":
+                await self._leave_room(websocket)
             else:
                 await self._send(websocket, {"type": "error", "reason": "unknown_action"})
             return
@@ -103,15 +119,18 @@ class GameServer:
             if any(active.id == user.id for active in self._users.values()):
                 raise AuthError("user_already_connected")
             self._users[websocket], self._tokens[websocket] = user, token
+            self._log_event(self.logger, logging.INFO, "authentication_succeeded",
+                            user_id=user.id, username=user.username)
             await self._send(websocket, {"type": "auth_result", "username": user.username,
                                          "rating": user.rating, "token": token})
             await self._send(websocket, {"type": "lobby_ready"})
         except (AuthError, KeyError, TypeError, json.JSONDecodeError) as error:
+            self._log_event(self.logger, logging.WARNING, "authentication_failed", reason=str(error))
             await self._send(websocket, {"type": "auth_error", "reason": str(error) or "invalid_auth_request"})
 
     async def _join_queue(self, websocket):
         user = self._users[websocket]
-        if self.games.for_user(user.id):
+        if self.rooms.for_user(user.id):
             await self._send(websocket, {"type": "matchmaking_error", "reason": "already_in_game"})
             return
         try:
@@ -121,6 +140,7 @@ class GameServer:
             return
         await self._send(websocket, {"type": "queue_joined",
                                      "timeout_seconds": self.settings.matchmaking.queue_timeout_seconds})
+        self._log_event(self.logger, logging.INFO, "queue_joined", user_id=user.id, rating=user.rating)
         await self._create_available_matches()
 
     async def _leave_queue(self, websocket):
@@ -128,26 +148,100 @@ class GameServer:
         removed = self.matchmaking.leave(user.id)
         await self._send(websocket, {"type": "queue_left", "was_queued": removed is not None})
 
+    async def _create_room(self, websocket):
+        user = self._users[websocket]
+        self.matchmaking.leave(user.id)
+        try:
+            room, member = self.rooms.create(user, websocket)
+        except ValueError as error:
+            await self._send(websocket, {"type": "room_error", "reason": str(error)})
+            return
+        self._log_event(self.logger, logging.INFO, "room_created", room_id=room.room_id,
+                        user_id=user.id, role=member.role.value)
+        await self._send(websocket, {"type": "room_created", "room_id": room.room_id,
+                                     "role": member.role.value})
+        await self._broadcast_room_state(room)
+
+    async def _join_room(self, websocket, message):
+        user = self._users[websocket]
+        self.matchmaking.leave(user.id)
+        try:
+            room, member = self.rooms.join(message["room_id"], user, websocket)
+        except (ValueError, KeyError) as error:
+            await self._send(websocket, {"type": "room_error", "reason": str(error) or "invalid_room_request"})
+            return
+        self._log_event(self.logger, logging.INFO, "room_joined", room_id=room.room_id,
+                        user_id=user.id, role=member.role.value)
+        await self._send(websocket, {"type": "room_joined", "room_id": room.room_id,
+                                     "role": member.role.value})
+        if room.ready() and room.game_id is None:
+            await self._start_room_game(room)
+        elif room.game_id is not None:
+            await self._announce_member(room, member)
+        await self._broadcast_room_state(room)
+
+    async def _leave_room(self, websocket):
+        user = self._users[websocket]
+        room = self.rooms.for_user(user.id)
+        if room and room.state == RoomState.PLAYING and room.role_for(user.id).can_play:
+            await self._send(websocket, {"type": "room_error", "reason": "cannot_leave_active_game"})
+            return
+        member = self.rooms.leave(user.id)
+        await self._send(websocket, {"type": "room_left", "was_in_room": member is not None})
+        if room:
+            await self._broadcast_room_state(room)
+
     async def _create_available_matches(self):
         for white_entry, black_entry in self.matchmaking.find_matches():
-            game = self.games.create(white_entry.user, black_entry.user,
-                                     white_entry.websocket, black_entry.websocket)
-            await self._announce_match(game)
+            room = self.rooms.create_for_match(white_entry, black_entry)
+            await self._start_room_game(room)
+
+    async def _start_room_game(self, room):
+        white = next(member for member in room.players() if member.role == RoomRole.WHITE)
+        black = next(member for member in room.players() if member.role == RoomRole.BLACK)
+        game = self.games.create(white.user, black.user, white.websocket, black.websocket)
+        self.rooms.attach_game(room.room_id, game.game_id)
+        room.state = RoomState.PLAYING
+        self._log_event(self.logger, logging.INFO, "game_started", room_id=room.room_id, game_id=game.game_id)
+        await self._announce_match(game)
+        await self._broadcast_room_state(room)
 
     async def _announce_match(self, game):
-        for slot in game.players.values():
-            opponent = game.opponent_of(slot.user.id)
-            await self._send(slot.websocket, {
-                "type": "match_found", "game_id": game.game_id, "color": slot.color.value,
-                "opponent": {"username": opponent.user.username, "rating": opponent.user.rating},
-            })
+        room = self._room_for_game(game.game_id)
+        for member in room.players():
+            await self._announce_member(room, member)
         await self._broadcast_snapshot(game)
+
+    async def _announce_member(self, room, member):
+        players = room.players()
+        opponent = next((candidate for candidate in players if candidate.user.id != member.user.id), None)
+        await self._safe_send(member.websocket, {
+            "type": "match_found", "game_id": room.game_id, "room_id": room.room_id,
+            "role": member.role.value, "color": member.role.color_value,
+            "opponent": None if opponent is None else {"username": opponent.user.username,
+                                                         "rating": opponent.user.rating},
+        })
+
+    async def _broadcast_room_state(self, room):
+        payload = {"type": "room_state", "room_id": room.room_id,
+                   "state": room.state.value, "members": room.members_payload()}
+        await asyncio.gather(*(self._safe_send(connection, payload) for connection in room.connections()))
+
+    def _room_for_game(self, game_id):
+        return self.rooms.for_game(game_id)
 
     async def _handle_game_command(self, websocket, raw):
         user = self._users[websocket]
-        game = self.games.for_user(user.id)
+        room = self.rooms.for_user(user.id)
+        game = self.games.get(room.game_id) if room and room.game_id else None
         if not game or game.finished:
             await self._send(websocket, {"type": "error", "reason": "not_in_active_game"})
+            return
+        role = room.role_for(user.id)
+        if role == RoomRole.SPECTATOR:
+            self._log_event(self.logger, logging.WARNING, "spectator_command_rejected",
+                            room_id=room.room_id, user_id=user.id)
+            await self._send(websocket, {"type": "error", "reason": "spectator_read_only"})
             return
         try:
             command = CommandParser.parse(raw)
@@ -162,6 +256,10 @@ class GameServer:
                   if isinstance(command, MoveCommand) else game.engine.request_jump(command.position))
         if not result.is_accepted:
             await self._send(websocket, {"type": "error", "reason": result.reason})
+        else:
+            self._log_event(self.logger, logging.INFO, "game_command_accepted",
+                            room_id=room.room_id, game_id=game.game_id, user_id=user.id,
+                            command_type=type(command).__name__)
 
     async def _handle_disconnect(self, websocket):
         queued = self.matchmaking.remove_connection(websocket)
@@ -169,34 +267,41 @@ class GameServer:
         self._tokens.pop(websocket, None)
         if queued or user is None:
             return
-        game = self.games.for_user(user.id)
-        if game and not game.finished:
-            game.disconnect(user.id)
-            self.disconnects.start(game.game_id, user.id)
-            opponent = game.opponent_of(user.id)
-            await self._safe_send(opponent.websocket, {
-                "type": "opponent_disconnected",
-                "remaining_seconds": int(self.settings.disconnect.grace_period_seconds),
-            })
+        room = self.rooms.for_user(user.id)
+        if room:
+            member = room.disconnect(user.id)
+            game = self.games.get(room.game_id) if room.game_id else None
+            if game and not game.finished and member.role.can_play:
+                game.disconnect(user.id)
+                self.disconnects.start(game.game_id, user.id)
+                await self._broadcast_to_room(room, {"type": "opponent_disconnected",
+                    "username": user.username,
+                    "remaining_seconds": int(self.settings.disconnect.grace_period_seconds)}, exclude_user=user.id)
+            self._log_event(self.logger, logging.INFO, "room_member_disconnected",
+                            room_id=room.room_id, user_id=user.id, role=member.role.value)
 
     async def _reconnect(self, websocket, message):
         token, game_id = message["token"], message["game_id"]
         user = self.auth.user_for_token(token)
         game = self.games.get(game_id)
-        if user is None or game is None or game.slot_for_user(user.id) is None or game.finished:
+        room = self.rooms.for_user(user.id) if user else None
+        member = room.member(user.id) if room else None
+        if user is None or game is None or member is None or room.game_id != game_id or game.finished:
             raise AuthError("invalid_reconnect")
-        slot = game.slot_for_user(user.id)
-        if slot.websocket is not None:
+        if member.websocket is not None:
             raise AuthError("player_already_connected")
-        if not self.disconnects.cancel(game_id, user.id):
+        if member.role.can_play and not self.disconnects.cancel(game_id, user.id):
             raise AuthError("reconnect_window_expired")
-        game.reconnect(user.id, websocket)
+        room.reconnect(user.id, websocket)
+        if member.role.can_play:
+            game.reconnect(user.id, websocket)
         self._users[websocket], self._tokens[websocket] = user, token
-        opponent = game.opponent_of(user.id)
         await self._send(websocket, {"type": "reconnect_success", "username": user.username,
-                                     "rating": user.rating, "game_id": game_id, "color": slot.color.value})
+                                     "rating": user.rating, "game_id": game_id, "room_id": room.room_id,
+                                     "role": member.role.value, "color": member.role.color_value})
         await self._send_snapshot(websocket, game)
-        await self._safe_send(opponent.websocket, {"type": "opponent_reconnected"})
+        await self._broadcast_to_room(room, {"type": "opponent_reconnected", "username": user.username},
+                                      exclude_user=user.id)
 
     async def _tick_loop(self):
         while True:
@@ -217,8 +322,10 @@ class GameServer:
             game = self.games.get(state.game_id)
             if game and not game.finished:
                 opponent = game.opponent_of(state.user_id)
-                await self._safe_send(opponent.websocket, {"type": "opponent_disconnected",
-                                                            "remaining_seconds": remaining})
+                room = self._room_for_game(game.game_id)
+                await self._broadcast_to_room(room, {"type": "opponent_disconnected",
+                    "username": game.slot_for_user(state.user_id).user.username,
+                    "remaining_seconds": remaining}, exclude_user=state.user_id)
         for state in self.disconnects.expired():
             game = self.games.get(state.game_id)
             if game and not game.finished:
@@ -236,14 +343,26 @@ class GameServer:
         if game.result_applied:
             return
         game.result_applied = game.finished = True
+        room = self._room_for_game(game.game_id)
+        room.state = RoomState.FINISHED
+        self._log_event(self.logger, logging.INFO, "game_finished", room_id=room.room_id,
+                        game_id=game.game_id, winner_user_id=winner_user_id, reason=reason)
         white = next(slot for slot in game.players.values() if slot.color == PieceColor.WHITE)
         black = next(slot for slot in game.players.values() if slot.color == PieceColor.BLACK)
         white_outcome = "draw" if winner_user_id is None else "win" if winner_user_id == white.user.id else "loss"
         white_rating, black_rating = self.results.record(white.user, black.user, white_outcome)
+        winner_slot = None if winner_user_id is None else game.slot_for_user(winner_user_id)
+        winner_payload = None if winner_slot is None else {
+            "username": winner_slot.user.username, "color": winner_slot.color.name}
         for slot, rating in ((white, white_rating), (black, black_rating)):
             outcome = "draw" if winner_user_id is None else "win" if slot.user.id == winner_user_id else "loss"
             await self._safe_send(slot.websocket, {"type": "game_result", "game_id": game.game_id,
-                                                    "outcome": outcome, "reason": reason, "rating": rating})
+                                                    "outcome": outcome, "reason": reason, "rating": rating,
+                                                    "winner": winner_payload})
+        for spectator in room.spectators():
+            await self._safe_send(spectator.websocket, {"type": "game_result", "game_id": game.game_id,
+                "outcome": "spectator", "reason": reason, "rating": spectator.user.rating,
+                "winner": winner_payload})
         # The regular tick loop stops broadcasting as soon as a game is marked
         # finished. Push one authoritative final frame so clients do not remain
         # frozen on an in-flight pre-capture snapshot.
@@ -253,7 +372,14 @@ class GameServer:
         sequence, snapshot = game.next_snapshot()
         payload = {"type": "snapshot", "game_id": game.game_id, "sequence": sequence,
                    "data": serialize(snapshot)}
-        await asyncio.gather(*(self._safe_send(slot.websocket, payload) for slot in game.players.values()))
+        room = self._room_for_game(game.game_id)
+        connections = room.connections() if room else tuple(slot.websocket for slot in game.players.values())
+        await asyncio.gather(*(self._safe_send(connection, payload) for connection in connections))
+
+    async def _broadcast_to_room(self, room, payload, exclude_user=None):
+        connections = tuple(member.websocket for member in room.members()
+                            if member.websocket is not None and member.user.id != exclude_user)
+        await asyncio.gather(*(self._safe_send(connection, payload) for connection in connections))
 
     async def _send_snapshot(self, websocket, game):
         sequence, snapshot = game.next_snapshot()
@@ -261,6 +387,8 @@ class GameServer:
                                      "sequence": sequence, "data": serialize(snapshot)})
 
     async def _send(self, websocket, payload):
+        self._log_event(self.logger, logging.DEBUG, "network_message_sent",
+                        connection_id=id(websocket), message_type=payload.get("type"))
         await websocket.send(json.dumps(payload))
 
     async def _safe_send(self, websocket, payload):
