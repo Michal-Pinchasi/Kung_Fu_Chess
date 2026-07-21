@@ -186,6 +186,14 @@ class TestOverlayRenderer:
         renderer.draw(frame, self._make_snapshot(game_over=True))
         assert not np.array_equal(frame.img, before)
 
+    def test_network_match_result_is_rendered_by_overlay_renderer(self):
+        from view.ui.rendering.overlay_renderer import OverlayRenderer
+        renderer = OverlayRenderer()
+        frame = self._make_frame()
+        before = frame.img.copy()
+        renderer.draw_match_result(frame, "yehudit", "WHITE")
+        assert not np.array_equal(frame.img, before)
+
 
 # ── GameScene ───────────────────────────────────────────────────────────────
 

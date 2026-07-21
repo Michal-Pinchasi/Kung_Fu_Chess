@@ -80,3 +80,13 @@ class OverlayRenderer:
                 color=tuple(WINNER_TEXT_COLOR),
                 thickness=WINNER_TEXT_THICKNESS,
             )
+
+    def draw_match_result(self, frame: Img, winner_name: str | None,
+                          winner_color: str | None, is_draw: bool = False) -> None:
+        """Draw the final network match result over the completed board."""
+        result_text = "DRAW" if is_draw else f"{winner_name} | {winner_color} | WINS"
+        frame.draw_rect(320, 315, 720, 190, color=(10, 10, 10, 255), alpha=0.92)
+        frame.put_text("GAME OVER", 500, 385, 1.25,
+                       color=(40, 215, 255, 255), thickness=3)
+        frame.put_text(result_text, 385, 455, 0.82,
+                       color=(255, 255, 255, 255), thickness=2)

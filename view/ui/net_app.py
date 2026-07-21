@@ -46,8 +46,9 @@ def app(uri: str = "ws://localhost:8765", window_name: str | None = None) -> Non
         return
 
     engine = RemoteEngine(client)
+    overlay_renderer = OverlayRenderer()
     scene = GameScene(canvas, BoardRenderer(os.path.join(ASSETS_DIR, "board.jpg")),
-                      PieceRenderer(os.path.join(ASSETS_DIR, "pieces2")), OverlayRenderer(), engine,
+                      PieceRenderer(os.path.join(ASSETS_DIR, "pieces2")), overlay_renderer, engine,
                       MoveHistoryRenderer())
     first_frame = scene.render()
     cv2.imshow(title, first_frame.img)
@@ -58,7 +59,7 @@ def app(uri: str = "ws://localhost:8765", window_name: str | None = None) -> Non
             frame = scene.render()
             _draw_account_status(frame, client)
             _draw_network_status(frame, client)
-            _draw_game_over_result(frame, client)
+            _draw_game_over_result(overlay_renderer, frame, client)
             cv2.imshow(title, frame.img)
             key = cv2.waitKey(1000 // FPS) & 0xFF
             if key in (ord("q"), 27):
@@ -119,6 +120,15 @@ def _field(frame, label: str, value: str, x: int, y: int, active: bool) -> None:
 
 def _matchmaking_screen(client: RemoteGameClient, canvas: GameCanvas, title: str) -> bool:
     """Lobby and queue presentation; network state remains owned by the client."""
+    action_clicked = [False]
+    action_box = (450, 470, 430, 80)
+
+    def on_mouse(event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            box_x, box_y, box_w, box_h = action_box
+            action_clicked[0] = box_x <= x <= box_x + box_w and box_y <= y <= box_y + box_h
+
+    cv2.setMouseCallback(title, on_mouse)
     while True:
         frame = canvas.fresh_frame()
         frame.draw_rect(280, 190, 740, 430, color=(20, 20, 20, 255), alpha=0.88)
@@ -128,15 +138,17 @@ def _matchmaking_screen(client: RemoteGameClient, canvas: GameCanvas, title: str
         searching = client.state == ConnectionState.SEARCHING
         instruction = "ENTER: CANCEL SEARCH" if searching else "ENTER: PLAY"
         frame.put_text(client.notification or "Ready to play", 450, 430, 0.75, thickness=2)
-        frame.put_text(instruction, 475, 510, 0.72, thickness=2)
+        frame.draw_rect(*action_box, color=(40, 215, 255, 255), thickness=2)
+        frame.put_text(instruction, 475, 520, 0.72, thickness=2)
         frame.put_text("ESC: exit", 570, 565, 0.55)
         cv2.imshow(title, frame.img)
-        key = cv2.waitKey(1000 // FPS) & 0xFF
+        key = cv2.waitKeyEx(1000 // FPS)
         if client.state == ConnectionState.PLAYING:
             return True
-        if key in (27, ord("q")):
+        if key in (27, ord("q"), ord("Q")):
             return False
-        if key in (10, 13):
+        if action_clicked[0] or key in (10, 13, 32, ord("p"), ord("P")):
+            action_clicked[0] = False
             client.leave_queue() if searching else client.join_queue()
 
 
@@ -165,25 +177,22 @@ def _draw_network_status(frame, client: RemoteGameClient) -> None:
                        thickness=2)
 
 
-def _draw_game_over_result(frame, client: RemoteGameClient) -> None:
-    """Draw the authoritative winner identity supplied by the server result."""
+def _draw_game_over_result(renderer: OverlayRenderer, frame, client: RemoteGameClient) -> None:
+    """Translate the authoritative network result into renderer input."""
     if not client.game_result:
         return
     outcome = client.game_result["outcome"]
     if outcome == "draw":
-        winner_text = "DRAW"
+        renderer.draw_match_result(frame, None, None, is_draw=True)
+        return
     elif outcome == "win":
-        winner_text = f"{client.username} | {'WHITE' if client.color == 'w' else 'BLACK'} | WIINN"
+        winner_name = client.username
+        winner_color = "WHITE" if client.color == "w" else "BLACK"
     else:
         opponent = client.opponent or {"username": "OPPONENT"}
-        opponent_color = "BLACK" if client.color == "w" else "WHITE"
-        winner_text = f"{opponent['username']} | {opponent_color} | WIINN"
-
-    frame.draw_rect(320, 315, 720, 190, color=(10, 10, 10, 255), alpha=0.92)
-    frame.put_text("GAME OVER", 500, 385, 1.25,
-                   color=(40, 215, 255, 255), thickness=3)
-    frame.put_text(winner_text, 385, 455, 0.82,
-                   color=(255, 255, 255, 255), thickness=2)
+        winner_name = opponent["username"]
+        winner_color = "BLACK" if client.color == "w" else "WHITE"
+    renderer.draw_match_result(frame, winner_name, winner_color)
 
 
 if __name__ == "__main__":
