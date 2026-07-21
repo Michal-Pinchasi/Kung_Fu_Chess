@@ -1,4 +1,4 @@
-"""Threaded WebSocket client that keeps the OpenCV UI non-blocking."""
+"""Resilient threaded WebSocket client for the OpenCV application."""
 
 import asyncio
 import json
@@ -7,135 +7,158 @@ import threading
 
 import websockets
 
+from config.multiplayer_settings import load_settings
+from network.client.connection_state import ConnectionState
 from network.snapshot_deserializer import deserialize
 
 
 class RemoteGameClient:
-    """Connect to one GameServer and expose its latest snapshot safely.
-
-    WebSocket I/O runs on its own thread.  The OpenCV render loop can therefore
-    keep drawing and handling mouse clicks normally on the main thread.
-    """
-
-    def __init__(self, uri: str = "ws://localhost:8765"):
+    def __init__(self, uri="ws://localhost:8765", settings=None):
         self.uri = uri
-        self.color = None
-        self.username = None
-        self.rating = None
-        self.token = None
-        self.game_result = None
-        self.error = None
+        self.settings = settings or load_settings()
+        self.state = ConnectionState.CONNECTING
+        self.color = self.username = self.rating = self.token = None
+        self.game_id = self.opponent = self.game_result = self.error = None
+        self.queue_timeout_seconds = None
+        self.opponent_disconnect_seconds = None
+        self.notification = None
         self._snapshot = None
+        self._last_sequence = -1
         self._lock = threading.Lock()
-        self._connected = threading.Event()
         self._authenticated = threading.Event()
-        self._closed = threading.Event()
         self._stop = threading.Event()
         self._outgoing = queue.Queue()
-        self._loop = None
-        self._websocket = None
-        self._thread = None
+        self._loop = self._websocket = self._thread = None
 
-    def connect(self) -> None:
-        """Start connecting in the background (safe to call once)."""
-        if self._thread is not None:
-            return
-        self._thread = threading.Thread(target=self._run, daemon=True, name="kung-fu-ws-client")
-        self._thread.start()
+    def connect(self):
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._run, daemon=True, name="kung-fu-ws-client")
+            self._thread.start()
 
-    def wait_until_ready(self, timeout: float = 5.0) -> bool:
-        """Wait until the server assigned a color or reported an error."""
-        self._connected.wait(timeout)
-        return self.color is not None and self.error is None
-
-    def authenticate(self, username: str, password: str, register: bool = False) -> None:
-        """Submit credentials from the graphical login screen."""
+    def authenticate(self, username, password, register=False):
         self.error = None
+        self.state = ConnectionState.AUTHENTICATING
         self._authenticated.clear()
-        self._outgoing.put(json.dumps({
-            "type": "auth", "mode": "register" if register else "login",
-            "username": username, "password": password,
-        }))
+        self._queue({"type": "auth", "mode": "register" if register else "login",
+                     "username": username, "password": password})
 
-    def wait_for_authentication(self, timeout: float = 5.0) -> bool:
-        self._authenticated.wait(timeout)
-        return self.username is not None and self.error is None
+    def join_queue(self):
+        if self.state != ConnectionState.LOBBY:
+            return False
+        self._queue({"type": "join_queue"})
+        return True
+
+    def leave_queue(self):
+        if self.state != ConnectionState.SEARCHING:
+            return False
+        self._queue({"type": "leave_queue"})
+        return True
 
     def latest_snapshot(self):
         with self._lock:
             return self._snapshot
 
-    def send_command(self, command: str) -> bool:
-        """Queue a wire command.  Returns False before the connection is ready."""
-        if self.color is None or self._stop.is_set():
+    def send_command(self, command):
+        if self.state != ConnectionState.PLAYING or self._stop.is_set():
             return False
         self._outgoing.put(command)
         return True
 
-    def close(self) -> None:
-        """Close the socket and wait briefly for its I/O thread to finish."""
+    def close(self):
         self._stop.set()
-        if self._loop is not None and self._websocket is not None:
+        self.state = ConnectionState.CLOSED
+        if self._loop and self._websocket:
             asyncio.run_coroutine_threadsafe(self._websocket.close(), self._loop)
-        if self._thread is not None:
+        if self._thread:
             self._thread.join(timeout=2)
 
-    def _run(self) -> None:
-        try:
-            asyncio.run(self._run_async())
-        except OSError as error:
-            self.error = f"Cannot connect to server: {error}"
-            self._connected.set()
-        finally:
-            self._closed.set()
+    def _queue(self, payload):
+        self._outgoing.put(json.dumps(payload))
 
-    async def _run_async(self) -> None:
+    def _run(self):
+        asyncio.run(self._connection_loop())
+
+    async def _connection_loop(self):
+        delay = self.settings.reconnect.initial_delay_seconds
+        while not self._stop.is_set():
+            try:
+                await self._run_once()
+                if not self.game_id or self.state == ConnectionState.GAME_OVER:
+                    break
+            except (OSError, websockets.ConnectionClosed):
+                if not self.game_id:
+                    self.error = "Connection to server was lost."
+                    break
+            if self._stop.is_set():
+                break
+            self.state = ConnectionState.RECONNECTING
+            self.notification = "Connection lost - reconnecting..."
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, self.settings.reconnect.maximum_delay_seconds)
+
+    async def _run_once(self):
         self._loop = asyncio.get_running_loop()
-        try:
-            async with websockets.connect(self.uri) as websocket:
-                self._websocket = websocket
-                receiver = asyncio.create_task(self._receive(websocket))
-                sender = asyncio.create_task(self._send(websocket))
-                done, pending = await asyncio.wait((receiver, sender), return_when=asyncio.FIRST_COMPLETED)
-                for task in pending:
-                    task.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
-                for task in done:
-                    error = task.exception()
-                    if error is not None:
-                        raise error
-        except websockets.ConnectionClosed:
-            if not self._stop.is_set():
-                self.error = "Connection to server was closed."
-                self._connected.set()
-        finally:
-            self._websocket = None
+        async with websockets.connect(self.uri) as websocket:
+            self._websocket = websocket
+            if self.state == ConnectionState.RECONNECTING and self.token and self.game_id:
+                await websocket.send(json.dumps({"type": "reconnect", "token": self.token,
+                                                 "game_id": self.game_id}))
+            receiver = asyncio.create_task(self._receive(websocket))
+            sender = asyncio.create_task(self._send(websocket))
+            done, pending = await asyncio.wait((receiver, sender), return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            for task in done:
+                error = task.exception()
+                if error:
+                    raise error
 
-    async def _receive(self, websocket) -> None:
-        async for raw_message in websocket:
-            message = json.loads(raw_message)
-            if message["type"] == "assigned_color":
-                self.color = message["color"]
-                self._connected.set()
-            elif message["type"] == "auth_result":
-                self.username = message["username"]
-                self.rating = message["rating"]
-                self.token = message["token"]
-                self._authenticated.set()
-            elif message["type"] == "snapshot":
+    async def _receive(self, websocket):
+        async for raw in websocket:
+            self._handle_event(json.loads(raw))
+
+    def _handle_event(self, message):
+        kind = message["type"]
+        if kind == "auth_result":
+            self.username, self.rating, self.token = message["username"], message["rating"], message["token"]
+            self._authenticated.set()
+        elif kind == "lobby_ready":
+            self.state = ConnectionState.LOBBY
+        elif kind == "queue_joined":
+            self.state = ConnectionState.SEARCHING
+            self.queue_timeout_seconds = message["timeout_seconds"]
+            self.notification = "Searching for an opponent..."
+        elif kind in ("queue_left", "matchmaking_timeout"):
+            self.state = ConnectionState.LOBBY
+            self.notification = "Search timed out." if kind == "matchmaking_timeout" else "Search cancelled."
+        elif kind == "match_found":
+            self.game_id, self.color, self.opponent = message["game_id"], message["color"], message["opponent"]
+            self.state, self.notification = ConnectionState.PLAYING, "Match found!"
+            self._last_sequence = -1
+        elif kind == "snapshot" and message.get("game_id") == self.game_id:
+            if message["sequence"] > self._last_sequence:
                 with self._lock:
                     self._snapshot = deserialize(message["data"])
-            elif message["type"] == "error":
-                self.error = message["reason"]
-                self._connected.set()
-            elif message["type"] == "auth_error":
-                self.error = message["reason"]
+                    self._last_sequence = message["sequence"]
+        elif kind == "opponent_disconnected":
+            self.opponent_disconnect_seconds = message["remaining_seconds"]
+        elif kind == "opponent_reconnected":
+            self.opponent_disconnect_seconds = None
+            self.notification = "Opponent reconnected."
+        elif kind == "reconnect_success":
+            self.username, self.rating = message["username"], message["rating"]
+            self.color, self.game_id = message["color"], message["game_id"]
+            self.state, self.notification = ConnectionState.PLAYING, "Reconnected."
+        elif kind == "game_result":
+            self.game_result, self.rating = message, message["rating"]
+            self.state = ConnectionState.GAME_OVER
+        elif kind in ("error", "auth_error", "matchmaking_error"):
+            self.error = message["reason"]
+            if kind == "auth_error":
                 self._authenticated.set()
-            elif message["type"] == "game_result":
-                self.game_result = message
-                self.rating = message["rating"]
 
-    async def _send(self, websocket) -> None:
+    async def _send(self, websocket):
         while not self._stop.is_set():
             try:
                 command = await asyncio.to_thread(self._outgoing.get, True, 0.2)

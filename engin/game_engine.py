@@ -181,12 +181,18 @@ class GameEngine:
         Appends any piece captured on arrival to captured_pieces in place.
         """
         for move in finished_moves:
+            # A different move earlier in this tick may have captured this
+            # in-flight piece at its source. A captured piece must never land.
+            if move.piece.state == "captured":
+                self.arbiter.cancel_piece_activities(move.piece)
+                continue
             self.board.remove_piece(move.frm.row, move.frm.col)
 
             target_piece = self.board.get_piece(move.to.row, move.to.col)
             is_capture = target_piece is not None and target_piece != EMPTY_SQUARE
             if is_capture:
                 captured_pieces.append(target_piece)
+                self.arbiter.cancel_piece_activities(target_piece)
                 target_piece.state = "captured"
                 self.board.remove_piece(move.to.row, move.to.col)
 
@@ -214,7 +220,7 @@ class GameEngine:
 
         if RuleEngine.check_king_capture(captured_pieces):
             self.game_state.is_game_over = True
-            self.game_state.winner = RuleEngine.get_game_winner(self.board)
+            self.game_state.winner = RuleEngine.get_capture_winner(captured_pieces)
             self._publish(GAME_OVER, GameOverEvent(winner=self.game_state.winner))
 
     def _credit_captures(self, captured_pieces) -> None:

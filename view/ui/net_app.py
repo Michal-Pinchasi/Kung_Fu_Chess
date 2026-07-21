@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from network.client.remote_engine import RemoteEngine
 from network.client.remote_game_client import RemoteGameClient
+from network.client.connection_state import ConnectionState
 from view.ui.app import ASSETS_DIR
 from view.ui.config.ui_config_loader import FPS, WINDOW_TITLE
 from view.ui.input.mouse_handler import MouseHandler
@@ -39,6 +40,11 @@ def app(uri: str = "ws://localhost:8765", window_name: str | None = None) -> Non
         cv2.destroyWindow(title)
         return
 
+    if not _matchmaking_screen(client, canvas, title):
+        client.close()
+        cv2.destroyWindow(title)
+        return
+
     engine = RemoteEngine(client)
     scene = GameScene(canvas, BoardRenderer(os.path.join(ASSETS_DIR, "board.jpg")),
                       PieceRenderer(os.path.join(ASSETS_DIR, "pieces2")), OverlayRenderer(), engine,
@@ -51,6 +57,8 @@ def app(uri: str = "ws://localhost:8765", window_name: str | None = None) -> Non
         while True:
             frame = scene.render()
             _draw_account_status(frame, client)
+            _draw_network_status(frame, client)
+            _draw_game_over_result(frame, client)
             cv2.imshow(title, frame.img)
             key = cv2.waitKey(1000 // FPS) & 0xFF
             if key in (ord("q"), 27):
@@ -81,7 +89,7 @@ def _login_screen(client: RemoteGameClient, canvas: GameCanvas, title: str) -> b
         key = cv2.waitKey(1000 // FPS) & 0xFF
         if key in (27, ord("q")):
             return False
-        if client.username is not None and client.color is not None:
+        if client.username is not None and client.state == ConnectionState.LOBBY:
             return True
         if key == 9:
             active_field = 1 - active_field
@@ -109,6 +117,29 @@ def _field(frame, label: str, value: str, x: int, y: int, active: bool) -> None:
     frame.put_text(value, x + 12, y + 52, 0.8, color=(255, 255, 255, 255), thickness=2)
 
 
+def _matchmaking_screen(client: RemoteGameClient, canvas: GameCanvas, title: str) -> bool:
+    """Lobby and queue presentation; network state remains owned by the client."""
+    while True:
+        frame = canvas.fresh_frame()
+        frame.draw_rect(280, 190, 740, 430, color=(20, 20, 20, 255), alpha=0.88)
+        frame.put_text(f"Welcome {client.username}", 450, 285, 1.0,
+                       color=(40, 215, 255, 255), thickness=2)
+        frame.put_text(f"ELO: {client.rating}", 560, 345, 0.8, thickness=2)
+        searching = client.state == ConnectionState.SEARCHING
+        instruction = "ENTER: CANCEL SEARCH" if searching else "ENTER: PLAY"
+        frame.put_text(client.notification or "Ready to play", 450, 430, 0.75, thickness=2)
+        frame.put_text(instruction, 475, 510, 0.72, thickness=2)
+        frame.put_text("ESC: exit", 570, 565, 0.55)
+        cv2.imshow(title, frame.img)
+        key = cv2.waitKey(1000 // FPS) & 0xFF
+        if client.state == ConnectionState.PLAYING:
+            return True
+        if key in (27, ord("q")):
+            return False
+        if key in (10, 13):
+            client.leave_queue() if searching else client.join_queue()
+
+
 def _draw_account_status(frame, client: RemoteGameClient) -> None:
     """Keep the authenticated identity and persisted rating visible in-game."""
     color_name = "WHITE" if client.color == "w" else "BLACK"
@@ -119,6 +150,40 @@ def _draw_account_status(frame, client: RemoteGameClient) -> None:
         outcome = client.game_result["outcome"].upper()
         frame.put_text(f"RESULT: {outcome} | NEW ELO: {client.rating}", 385, 85, 0.75,
                        color=(40, 215, 255, 255), thickness=2)
+
+
+def _draw_network_status(frame, client: RemoteGameClient) -> None:
+    if client.state == ConnectionState.RECONNECTING:
+        frame.draw_rect(360, 340, 610, 130, color=(10, 10, 10, 255), alpha=0.9)
+        frame.put_text("CONNECTION LOST - RECONNECTING...", 410, 415, 0.8,
+                       color=(0, 180, 255, 255), thickness=2)
+    if client.opponent_disconnect_seconds is not None:
+        frame.draw_rect(365, 330, 600, 150, color=(10, 10, 10, 255), alpha=0.9)
+        frame.put_text("OPPONENT DISCONNECTED", 440, 395, 0.85,
+                       color=(0, 180, 255, 255), thickness=2)
+        frame.put_text(f"Technical win in {client.opponent_disconnect_seconds}s", 460, 445, 0.72,
+                       thickness=2)
+
+
+def _draw_game_over_result(frame, client: RemoteGameClient) -> None:
+    """Draw the authoritative winner identity supplied by the server result."""
+    if not client.game_result:
+        return
+    outcome = client.game_result["outcome"]
+    if outcome == "draw":
+        winner_text = "DRAW"
+    elif outcome == "win":
+        winner_text = f"{client.username} | {'WHITE' if client.color == 'w' else 'BLACK'} | WIINN"
+    else:
+        opponent = client.opponent or {"username": "OPPONENT"}
+        opponent_color = "BLACK" if client.color == "w" else "WHITE"
+        winner_text = f"{opponent['username']} | {opponent_color} | WIINN"
+
+    frame.draw_rect(320, 315, 720, 190, color=(10, 10, 10, 255), alpha=0.92)
+    frame.put_text("GAME OVER", 500, 385, 1.25,
+                   color=(40, 215, 255, 255), thickness=3)
+    frame.put_text(winner_text, 385, 455, 0.82,
+                   color=(255, 255, 255, 255), thickness=2)
 
 
 if __name__ == "__main__":

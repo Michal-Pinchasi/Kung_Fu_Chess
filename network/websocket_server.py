@@ -1,14 +1,4 @@
-"""
-Local multiplayer WebSocket server for Kung Fu Chess.
-
-The composition root for the network layer — the WebSocket counterpart to
-view/ui/app.py (GUI) and main.py (headless CLI). Wires together GameEngine,
-MessageBus, SessionManager, and CommandParser: assigns each of up to two
-connecting clients a player color, routes incoming move/jump commands
-through the engine after authorizing them against the live board, and
-periodically broadcasts the serialized game snapshot to every connected
-client so their screens stay in sync in real time.
-"""
+"""Authenticated matchmaking WebSocket server and multiplayer composition root."""
 
 import asyncio
 import json
@@ -16,18 +6,17 @@ import logging
 
 import websockets
 
-from storage.board_parser import BoardParser
-from engin.game_engine import GameEngine
-from events.message_bus import MessageBus
-from events.game_events import GAME_OVER, GameOverEvent
-from network.session_manager import SessionManager
-from network.command_parser import CommandParser, CommandParseError, MoveCommand
-from network.snapshot_serializer import serialize
 from config.multiplayer_settings import load_settings
-from storage.user_repository import UserRepository
-from services.auth_service import AuthService, AuthError
+from model.constants import PieceColor
+from network.command_parser import CommandParser, CommandParseError, MoveCommand
+from network.disconnect_manager import DisconnectManager
+from network.game_registry import GameRegistry
+from network.snapshot_serializer import serialize
+from matchmaking.matchmaking_manager import MatchmakingManager
+from services.auth_service import AuthError, AuthService
 from services.elo_calculator import EloCalculator
 from services.game_result_service import GameResultService
+from storage.user_repository import UserRepository
 
 logger = logging.getLogger(__name__)
 
@@ -43,211 +32,247 @@ bR bN bB bQ bK bB bN bR"""
 
 
 class GameServer:
-    """WebSocket server hosting a single real-time Kung Fu Chess match.
+    """Routes authenticated sockets between lobby, queue and isolated games."""
 
-    Does not itself contain chess rules, timing logic, or session/color
-    policy — those all live in GameEngine/RealTimeArbiter/RuleEngine and
-    SessionManager respectively. This class only wires them to the network:
-    it never mutates the board directly, and never decides move legality
-    or ownership itself.
-    """
-
-    def __init__(self, host: str = "localhost", port: int = 8765, tick_ms: int = 100,
-                 settings=None, repository=None):
-        """Create a server that will listen on host:port once start() runs.
-
-        Parameters
-        ----------
-        host : str
-            Interface to listen on. "localhost" restricts connections to
-            the local machine, per Phase 1's local-multiplayer scope.
-        port : int
-            TCP port to listen on.
-        tick_ms : int
-            How often, in milliseconds, to advance the simulated game clock
-            (GameEngine.wait) and broadcast a fresh snapshot to all clients.
-        """
-        self.host = host
-        self.port = port
-        self.tick_ms = tick_ms
-
-        self.bus = MessageBus()
+    def __init__(self, host="localhost", port=8765, tick_ms=100, settings=None, repository=None):
+        self.host, self.port, self.tick_ms = host, port, tick_ms
         self.settings = settings or load_settings()
         self.repository = repository or UserRepository(self.settings.database_path)
         self.repository.initialize()
         self.auth = AuthService(self.repository, self.settings)
         self.results = GameResultService(self.repository, EloCalculator(self.settings.elo))
-        board = BoardParser.parse(_DEFAULT_BOARD)
-        self.engine = GameEngine(board, message_bus=self.bus)
-        self.sessions = SessionManager()
-        self._connections: set = set()
-        self._users: dict = {}
-        self._ratings_applied = False
+        mm = self.settings.matchmaking
+        self.matchmaking = MatchmakingManager(mm.elo_range, mm.queue_timeout_seconds)
+        self.games = GameRegistry(_DEFAULT_BOARD)
+        self.disconnects = DisconnectManager(self.settings.disconnect.grace_period_seconds)
+        self._users: dict[object, object] = {}
+        self._tokens: dict[object, str] = {}
+        self._connections: set[object] = set()
         self._server = None
-
-        self.bus.subscribe(GAME_OVER, self._on_game_over)
 
     @property
     def bound_port(self):
-        """Return the TCP port the server is actually listening on, or None before start().
+        return None if self._server is None else self._server.sockets[0].getsockname()[1]
 
-        Useful when port=0 was requested (let the OS pick a free port),
-        e.g. in tests that need to know which port to connect to.
-        """
-        if self._server is None:
-            return None
-        return self._server.sockets[0].getsockname()[1]
-
-    async def start(self) -> None:
-        """Start listening for connections and run the simulation tick loop forever.
-
-        Runs until the enclosing task is cancelled (e.g. by the caller
-        cancelling the asyncio task this coroutine is scheduled on).
-        """
+    async def start(self):
         async with websockets.serve(self._handle_connection, self.host, self.port) as server:
             self._server = server
             logger.info("GameServer listening on %s:%d", self.host, self.bound_port)
             await self._tick_loop()
 
-    async def _handle_connection(self, websocket) -> None:
-        """Assign a connecting client a color (or reject it) and process its messages.
-
-        Called once per incoming connection by the websockets library.
-        Runs for the lifetime of that connection.
-        """
+    async def _handle_connection(self, websocket):
         self._connections.add(websocket)
-
         try:
-            async for raw_message in websocket:
-                await self._handle_message(websocket, raw_message)
+            async for raw in websocket:
+                await self._handle_message(websocket, raw)
         finally:
-            self.sessions.release(websocket)
-            self._users.pop(websocket, None)
+            await self._handle_disconnect(websocket)
             self._connections.discard(websocket)
 
-    async def _handle_message(self, websocket, raw_message: str) -> None:
-        """Parse, authorize, and apply one incoming wire command from a client.
-
-        Sends a JSON error back to that single client (never broadcast) on
-        a parse failure, an unauthorized command, or a rejected engine
-        request. The engine is only ever touched once the command has
-        parsed successfully and passed ownership authorization.
-        """
+    async def _handle_message(self, websocket, raw):
         if websocket not in self._users:
-            await self._handle_authentication(websocket, raw_message)
+            await self._handle_unauthenticated(websocket, raw)
             return
-
         try:
-            command = CommandParser.parse(raw_message)
-        except CommandParseError as error:
-            await self._send(websocket, {"type": "error", "reason": str(error)})
+            message = json.loads(raw)
+        except json.JSONDecodeError:
+            message = None
+        if isinstance(message, dict):
+            action = message.get("type")
+            if action == "join_queue":
+                await self._join_queue(websocket)
+            elif action == "leave_queue":
+                await self._leave_queue(websocket)
+            else:
+                await self._send(websocket, {"type": "error", "reason": "unknown_action"})
             return
+        await self._handle_game_command(websocket, raw)
 
-        source = command.source if isinstance(command, MoveCommand) else command.position
-        if not self.sessions.is_authorized(websocket, self.engine.board, source):
-            await self._send(websocket, {"type": "error", "reason": "not_your_piece"})
-            return
-
-        if isinstance(command, MoveCommand):
-            result = self.engine.request_move(command.source, command.destination)
-        else:
-            result = self.engine.request_jump(command.position)
-
-        if not result.is_accepted:
-            await self._send(websocket, {"type": "error", "reason": result.reason})
-
-    async def _handle_authentication(self, websocket, raw_message: str) -> None:
-        """Authenticate a socket before it receives a player color or game state."""
+    async def _handle_unauthenticated(self, websocket, raw):
         try:
-            message = json.loads(raw_message)
+            message = json.loads(raw)
+            if message.get("type") == "reconnect":
+                await self._reconnect(websocket, message)
+                return
             if message.get("type") != "auth":
                 raise AuthError("authentication_required")
             username, password = message["username"], message["password"]
             if message.get("mode") == "register":
                 self.auth.register(username, password)
             user, token = self.auth.login(username, password)
-            if any(active_user.id == user.id for active_user in self._users.values()):
-                raise AuthError("user_already_in_game")
-            color = self.sessions.assign_color(websocket)
-            if color is None:
-                await self._send(websocket, {"type": "error", "reason": "game_full"})
-                return
-            self._users[websocket] = user
-            await self._send(websocket, {
-                "type": "auth_result", "username": user.username, "rating": user.rating, "token": token,
-            })
-            await self._send(websocket, {"type": "assigned_color", "color": color.value})
-            await self._send(websocket, {"type": "snapshot", "data": serialize(self.engine.snapshot())})
+            if any(active.id == user.id for active in self._users.values()):
+                raise AuthError("user_already_connected")
+            self._users[websocket], self._tokens[websocket] = user, token
+            await self._send(websocket, {"type": "auth_result", "username": user.username,
+                                         "rating": user.rating, "token": token})
+            await self._send(websocket, {"type": "lobby_ready"})
         except (AuthError, KeyError, TypeError, json.JSONDecodeError) as error:
-            reason = str(error) if str(error) else "invalid_auth_request"
-            await self._send(websocket, {"type": "auth_error", "reason": reason})
+            await self._send(websocket, {"type": "auth_error", "reason": str(error) or "invalid_auth_request"})
 
-    async def _tick_loop(self) -> None:
-        """Advance simulated time and broadcast a fresh snapshot on a fixed interval."""
+    async def _join_queue(self, websocket):
+        user = self._users[websocket]
+        if self.games.for_user(user.id):
+            await self._send(websocket, {"type": "matchmaking_error", "reason": "already_in_game"})
+            return
+        try:
+            self.matchmaking.join(user, websocket)
+        except ValueError as error:
+            await self._send(websocket, {"type": "matchmaking_error", "reason": str(error)})
+            return
+        await self._send(websocket, {"type": "queue_joined",
+                                     "timeout_seconds": self.settings.matchmaking.queue_timeout_seconds})
+        await self._create_available_matches()
+
+    async def _leave_queue(self, websocket):
+        user = self._users[websocket]
+        removed = self.matchmaking.leave(user.id)
+        await self._send(websocket, {"type": "queue_left", "was_queued": removed is not None})
+
+    async def _create_available_matches(self):
+        for white_entry, black_entry in self.matchmaking.find_matches():
+            game = self.games.create(white_entry.user, black_entry.user,
+                                     white_entry.websocket, black_entry.websocket)
+            await self._announce_match(game)
+
+    async def _announce_match(self, game):
+        for slot in game.players.values():
+            opponent = game.opponent_of(slot.user.id)
+            await self._send(slot.websocket, {
+                "type": "match_found", "game_id": game.game_id, "color": slot.color.value,
+                "opponent": {"username": opponent.user.username, "rating": opponent.user.rating},
+            })
+        await self._broadcast_snapshot(game)
+
+    async def _handle_game_command(self, websocket, raw):
+        user = self._users[websocket]
+        game = self.games.for_user(user.id)
+        if not game or game.finished:
+            await self._send(websocket, {"type": "error", "reason": "not_in_active_game"})
+            return
+        try:
+            command = CommandParser.parse(raw)
+        except CommandParseError as error:
+            await self._send(websocket, {"type": "error", "reason": str(error)})
+            return
+        source = command.source if isinstance(command, MoveCommand) else command.position
+        if not game.is_authorized(user.id, source):
+            await self._send(websocket, {"type": "error", "reason": "not_your_piece"})
+            return
+        result = (game.engine.request_move(command.source, command.destination)
+                  if isinstance(command, MoveCommand) else game.engine.request_jump(command.position))
+        if not result.is_accepted:
+            await self._send(websocket, {"type": "error", "reason": result.reason})
+
+    async def _handle_disconnect(self, websocket):
+        queued = self.matchmaking.remove_connection(websocket)
+        user = self._users.pop(websocket, None)
+        self._tokens.pop(websocket, None)
+        if queued or user is None:
+            return
+        game = self.games.for_user(user.id)
+        if game and not game.finished:
+            game.disconnect(user.id)
+            self.disconnects.start(game.game_id, user.id)
+            opponent = game.opponent_of(user.id)
+            await self._safe_send(opponent.websocket, {
+                "type": "opponent_disconnected",
+                "remaining_seconds": int(self.settings.disconnect.grace_period_seconds),
+            })
+
+    async def _reconnect(self, websocket, message):
+        token, game_id = message["token"], message["game_id"]
+        user = self.auth.user_for_token(token)
+        game = self.games.get(game_id)
+        if user is None or game is None or game.slot_for_user(user.id) is None or game.finished:
+            raise AuthError("invalid_reconnect")
+        slot = game.slot_for_user(user.id)
+        if slot.websocket is not None:
+            raise AuthError("player_already_connected")
+        if not self.disconnects.cancel(game_id, user.id):
+            raise AuthError("reconnect_window_expired")
+        game.reconnect(user.id, websocket)
+        self._users[websocket], self._tokens[websocket] = user, token
+        opponent = game.opponent_of(user.id)
+        await self._send(websocket, {"type": "reconnect_success", "username": user.username,
+                                     "rating": user.rating, "game_id": game_id, "color": slot.color.value})
+        await self._send_snapshot(websocket, game)
+        await self._safe_send(opponent.websocket, {"type": "opponent_reconnected"})
+
+    async def _tick_loop(self):
         while True:
             await asyncio.sleep(self.tick_ms / 1000)
-            self.engine.wait(self.tick_ms)
-            await self._broadcast_snapshot()
+            for player in self.matchmaking.expired():
+                await self._safe_send(player.websocket, {"type": "matchmaking_timeout"})
+            await self._create_available_matches()
+            for game in self.games.all():
+                game.tick(self.tick_ms)
+                if game.pending_game_over and not game.result_applied:
+                    await self._finish_normal_game(game)
+                if not game.finished:
+                    await self._broadcast_snapshot(game)
+            await self._process_disconnects()
 
-    async def _broadcast_snapshot(self) -> None:
-        """Send the current serialized game snapshot to every connected client."""
-        if not self._connections:
+    async def _process_disconnects(self):
+        for state, remaining in self.disconnects.updates():
+            game = self.games.get(state.game_id)
+            if game and not game.finished:
+                opponent = game.opponent_of(state.user_id)
+                await self._safe_send(opponent.websocket, {"type": "opponent_disconnected",
+                                                            "remaining_seconds": remaining})
+        for state in self.disconnects.expired():
+            game = self.games.get(state.game_id)
+            if game and not game.finished:
+                winner = game.opponent_of(state.user_id)
+                await self._finish_game(game, winner.user.id, "technical_forfeit")
+
+    async def _finish_normal_game(self, game):
+        winner_color = game.pending_game_over.winner
+        winner = next((slot for slot in game.players.values()
+                       if (winner_color == "WHITE" and slot.color == PieceColor.WHITE)
+                       or (winner_color == "BLACK" and slot.color == PieceColor.BLACK)), None)
+        await self._finish_game(game, winner.user.id if winner else None, "king_capture")
+
+    async def _finish_game(self, game, winner_user_id, reason):
+        if game.result_applied:
             return
-        message = json.dumps({"type": "snapshot", "data": serialize(self.engine.snapshot())})
-        await asyncio.gather(
-            *(self._send_raw(ws, message) for ws in list(self._connections)),
-            return_exceptions=True,
-        )
+        game.result_applied = game.finished = True
+        white = next(slot for slot in game.players.values() if slot.color == PieceColor.WHITE)
+        black = next(slot for slot in game.players.values() if slot.color == PieceColor.BLACK)
+        white_outcome = "draw" if winner_user_id is None else "win" if winner_user_id == white.user.id else "loss"
+        white_rating, black_rating = self.results.record(white.user, black.user, white_outcome)
+        for slot, rating in ((white, white_rating), (black, black_rating)):
+            outcome = "draw" if winner_user_id is None else "win" if slot.user.id == winner_user_id else "loss"
+            await self._safe_send(slot.websocket, {"type": "game_result", "game_id": game.game_id,
+                                                    "outcome": outcome, "reason": reason, "rating": rating})
+        # The regular tick loop stops broadcasting as soon as a game is marked
+        # finished. Push one authoritative final frame so clients do not remain
+        # frozen on an in-flight pre-capture snapshot.
+        await self._broadcast_snapshot(game)
 
-    def _on_game_over(self, event: GameOverEvent) -> None:
-        """MessageBus handler for GAME_OVER: broadcast immediately, don't wait for the next tick.
+    async def _broadcast_snapshot(self, game):
+        sequence, snapshot = game.next_snapshot()
+        payload = {"type": "snapshot", "game_id": game.game_id, "sequence": sequence,
+                   "data": serialize(snapshot)}
+        await asyncio.gather(*(self._safe_send(slot.websocket, payload) for slot in game.players.values()))
 
-        MessageBus handlers are always called synchronously, so this
-        schedules the actual async broadcast as a background task rather
-        than awaiting it directly.
-        """
-        if not self._ratings_applied:
-            self._ratings_applied = True
-            asyncio.create_task(self._record_ratings_and_broadcast(event))
-        else:
-            asyncio.create_task(self._broadcast_snapshot())
+    async def _send_snapshot(self, websocket, game):
+        sequence, snapshot = game.next_snapshot()
+        await self._send(websocket, {"type": "snapshot", "game_id": game.game_id,
+                                     "sequence": sequence, "data": serialize(snapshot)})
 
-    async def _record_ratings_and_broadcast(self, event: GameOverEvent) -> None:
-        """Persist ELO once, then make the post-game ratings visible to both players."""
-        white_socket = next((ws for ws in self._users if self.sessions.color_for(ws)
-                             and self.sessions.color_for(ws).value == "w"), None)
-        black_socket = next((ws for ws in self._users if self.sessions.color_for(ws)
-                             and self.sessions.color_for(ws).value == "b"), None)
-        if white_socket is not None and black_socket is not None:
-            white, black = self._users[white_socket], self._users[black_socket]
-            white_outcome = "win" if event.winner == "WHITE" else "loss" if event.winner == "BLACK" else "draw"
-            white_rating, black_rating = self.results.record(white, black, white_outcome)
-            await self._send(white_socket, {"type": "game_result", "outcome": white_outcome, "rating": white_rating})
-            black_outcome = {"win": "loss", "loss": "win", "draw": "draw"}[white_outcome]
-            await self._send(black_socket, {"type": "game_result", "outcome": black_outcome, "rating": black_rating})
-        await self._broadcast_snapshot()
+    async def _send(self, websocket, payload):
+        await websocket.send(json.dumps(payload))
 
-    async def _send(self, websocket, payload: dict) -> None:
-        """Serialize payload to JSON and send it to a single client."""
-        await self._send_raw(websocket, json.dumps(payload))
-
-    @staticmethod
-    async def _send_raw(websocket, message: str) -> None:
-        """Send a raw JSON string to a single client, ignoring a closed connection.
-
-        A client that disconnected between being listed and being sent to
-        raises ConnectionClosed here; that race is expected and harmless —
-        _handle_connection's own finally block is what actually removes a
-        disconnected client from self._connections.
-        """
+    async def _safe_send(self, websocket, payload):
+        if websocket is None:
+            return
         try:
-            await websocket.send(message)
+            await self._send(websocket, payload)
         except websockets.ConnectionClosed:
             pass
 
 
-async def _run() -> None:
-    """Start a GameServer with default settings and run it until interrupted."""
+async def _run():
     logging.basicConfig(level=logging.INFO)
     await GameServer().start()
 

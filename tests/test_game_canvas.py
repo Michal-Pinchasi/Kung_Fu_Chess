@@ -28,14 +28,14 @@ def test_background_loads_successfully():
     """GameCanvas loads the background image without raising."""
     canvas = GameCanvas(BACKGROUND_PATH)
 
-    assert canvas.canvas is not None
-    assert canvas.canvas.img is not None
+    assert canvas.fresh_frame() is not None
+    assert canvas.fresh_frame().img is not None
 
 
 def test_background_has_valid_dimensions():
     """The loaded background image has positive width and height."""
     canvas = GameCanvas(BACKGROUND_PATH)
-    h, w = canvas.canvas.img.shape[:2]
+    h, w = canvas.fresh_frame().img.shape[:2]
 
     assert w > 0
     assert h > 0
@@ -45,10 +45,12 @@ def test_board_draws_on_background():
     """The board image can be placed on top of the background without errors."""
     canvas = GameCanvas(BACKGROUND_PATH)
     board_img = Img().read(BOARD_PATH, size=(Layout.BOARD_SIZE, Layout.BOARD_SIZE))
-    board_img.draw_on(canvas.canvas, Layout.BOARD_X, Layout.BOARD_Y)
-    assert canvas.canvas.img is not None
+    frame = canvas.fresh_frame()
+    board_img.draw_on(frame, Layout.BOARD_X, Layout.BOARD_Y)
+    assert frame.img is not None
 
 
+@pytest.mark.skip(reason="manual OpenCV visual check; not an automated test")
 def test_visual_display(request):
     """
     Visual test — opens a window showing the board on the background.
@@ -56,5 +58,6 @@ def test_visual_display(request):
     """
     canvas = GameCanvas(BACKGROUND_PATH)
     board_img = Img().read(BOARD_PATH, size=(Layout.BOARD_SIZE, Layout.BOARD_SIZE))
-    board_img.draw_on(canvas.canvas, Layout.BOARD_X, Layout.BOARD_Y)
-    canvas.show()
+    frame = canvas.fresh_frame()
+    board_img.draw_on(frame, Layout.BOARD_X, Layout.BOARD_Y)
+    canvas.show(frame)

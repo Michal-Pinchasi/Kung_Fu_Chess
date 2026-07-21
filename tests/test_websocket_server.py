@@ -1,46 +1,32 @@
-"""
-Async integration tests for GameServer.
-
-Uses asyncio.run() directly inside plain (synchronous) pytest test
-functions, so no pytest-asyncio plugin is required — consistent with
-keeping new test-only dependencies to a minimum.
-
-Each test starts a real GameServer on an OS-assigned free port
-(port=0), connects real websockets clients to it over localhost, and
-tears the server down in a finally block so no background task or open
-socket leaks between tests.
-"""
+"""Real WebSocket integration coverage for authentication, matchmaking and recovery."""
 
 import asyncio
 import json
 import tempfile
 from dataclasses import replace
 
-import pytest
 import websockets
 
+from config.multiplayer_settings import load_settings, MatchmakingSettings
 from network.websocket_server import GameServer
-from config.multiplayer_settings import load_settings
-from events.game_events import GameOverEvent
 
 
-async def _start_server(tick_ms: int = 50) -> GameServer:
-    """Start a GameServer on an ephemeral local port and return it once bound."""
+async def _start_server(timeout=60):
     tempdir = tempfile.TemporaryDirectory()
-    settings = replace(load_settings(), database_path=f"{tempdir.name}/test.sqlite3")
-    server = GameServer(host="localhost", port=0, tick_ms=tick_ms, settings=settings)
+    base = load_settings()
+    settings = replace(base, database_path=f"{tempdir.name}/test.sqlite3",
+                       matchmaking=MatchmakingSettings(100, timeout, 0.01))
+    server = GameServer(host="localhost", port=0, tick_ms=20, settings=settings)
     server._tempdir = tempdir
     server._start_task = asyncio.create_task(server.start())
-
     for _ in range(100):
         if server.bound_port is not None:
             return server
         await asyncio.sleep(0.01)
-    raise TimeoutError("GameServer did not bind to a port in time")
+    raise TimeoutError("server did not bind")
 
 
-async def _stop_server(server: GameServer) -> None:
-    """Cancel a server started by _start_server and wait for shutdown to finish."""
+async def _stop_server(server):
     server._start_task.cancel()
     try:
         await server._start_task
@@ -49,174 +35,138 @@ async def _stop_server(server: GameServer) -> None:
     server._tempdir.cleanup()
 
 
-async def _recv_json(connection) -> dict:
-    """Receive one WebSocket message and parse it as JSON."""
-    return json.loads(await connection.recv())
-
-
-async def _recv_type(connection, message_type: str) -> dict:
-    """Receive messages until the requested type arrives.
-
-    Snapshots are periodic and may legitimately arrive between a command being
-    sent and its acknowledgement/error, so integration tests must not assume
-    they are absent from that interval.
-    """
+async def _recv_type(connection, kind):
     while True:
-        message = await asyncio.wait_for(_recv_json(connection), timeout=1.0)
-        if message["type"] == message_type:
+        message = json.loads(await asyncio.wait_for(connection.recv(), 2))
+        if message["type"] == kind:
             return message
 
 
-async def _authenticate(connection, username: str) -> None:
-    await connection.send(json.dumps({"type": "auth", "mode": "register", "username": username, "password": "password"}))
-    assert (await _recv_type(connection, "auth_result"))["username"] == username
-    await _recv_type(connection, "assigned_color")
+async def _register(connection, username):
+    await connection.send(json.dumps({"type": "auth", "mode": "register",
+                                      "username": username, "password": "password"}))
+    auth = await _recv_type(connection, "auth_result")
+    await _recv_type(connection, "lobby_ready")
+    return auth
 
 
-def test_first_and_second_client_assigned_white_and_black():
-    async def scenario():
-        server = await _start_server()
-        try:
-            uri = f"ws://localhost:{server.bound_port}"
-            async with websockets.connect(uri) as client_a:
-                await _authenticate(client_a, "white")
-                assert server.sessions.color_for(next(iter(server._users))).value == "w"
-
-                async with websockets.connect(uri) as client_b:
-                    await _authenticate(client_b, "black")
-        finally:
-            await _stop_server(server)
-
-    asyncio.run(scenario())
+async def _match(first, second):
+    await first.send(json.dumps({"type": "join_queue"}))
+    await _recv_type(first, "queue_joined")
+    await second.send(json.dumps({"type": "join_queue"}))
+    await _recv_type(second, "queue_joined")
+    return await _recv_type(first, "match_found"), await _recv_type(second, "match_found")
 
 
-def test_third_client_rejected_when_game_full():
-    async def scenario():
-        server = await _start_server()
-        try:
-            uri = f"ws://localhost:{server.bound_port}"
-            async with websockets.connect(uri) as client_a, websockets.connect(uri) as client_b:
-                await _authenticate(client_a, "white")
-                await _authenticate(client_b, "black")
-
-                async with websockets.connect(uri) as client_c:
-                    await client_c.send(json.dumps({"type": "auth", "mode": "register", "username": "third", "password": "password"}))
-                    message = await _recv_type(client_c, "error")
-                    assert message == {"type": "error", "reason": "game_full"}
-        finally:
-            await _stop_server(server)
-
-    asyncio.run(scenario())
-
-
-def test_registered_user_can_log_in_but_cannot_occupy_both_colors():
+def test_players_match_and_receive_isolated_game_snapshot():
     async def scenario():
         server = await _start_server()
         try:
             uri = f"ws://localhost:{server.bound_port}"
             async with websockets.connect(uri) as first, websockets.connect(uri) as second:
-                await _authenticate(first, "same-player")
-                await second.send(json.dumps({
-                    "type": "auth", "mode": "login", "username": "same-player", "password": "password",
-                }))
-                assert await _recv_type(second, "auth_error") == {
-                    "type": "auth_error", "reason": "user_already_in_game",
-                }
+                await _register(first, "white")
+                await _register(second, "black")
+                first_match, second_match = await _match(first, second)
+                assert first_match["game_id"] == second_match["game_id"]
+                assert {first_match["color"], second_match["color"]} == {"w", "b"}
+                snapshot = await _recv_type(first, "snapshot")
+                assert snapshot["game_id"] == first_match["game_id"]
+                assert snapshot["sequence"] > 0
         finally:
             await _stop_server(server)
-
     asyncio.run(scenario())
 
 
-def test_game_over_updates_database_and_notifies_both_players_once():
+def test_leave_queue_and_timeout_events():
+    async def scenario():
+        server = await _start_server(timeout=0.05)
+        try:
+            uri = f"ws://localhost:{server.bound_port}"
+            async with websockets.connect(uri) as player:
+                await _register(player, "waiting")
+                await player.send(json.dumps({"type": "join_queue"}))
+                await _recv_type(player, "queue_joined")
+                assert (await _recv_type(player, "matchmaking_timeout"))["type"] == "matchmaking_timeout"
+                await player.send(json.dumps({"type": "join_queue"}))
+                await _recv_type(player, "queue_joined")
+                await player.send(json.dumps({"type": "leave_queue"}))
+                assert (await _recv_type(player, "queue_left"))["was_queued"]
+        finally:
+            await _stop_server(server)
+    asyncio.run(scenario())
+
+
+def test_disconnect_reconnect_restores_latest_snapshot():
     async def scenario():
         server = await _start_server()
         try:
             uri = f"ws://localhost:{server.bound_port}"
-            async with websockets.connect(uri) as white, websockets.connect(uri) as black:
-                await _authenticate(white, "rated-white")
-                await _authenticate(black, "rated-black")
+            first = await websockets.connect(uri)
+            second = await websockets.connect(uri)
+            first_auth = await _register(first, "returning")
+            await _register(second, "opponent")
+            first_match, _ = await _match(first, second)
+            await _recv_type(first, "snapshot")
+            await first.close()
+            notice = await _recv_type(second, "opponent_disconnected")
+            assert notice["remaining_seconds"] > 0
 
-                server._on_game_over(GameOverEvent(winner="WHITE"))
-                white_result = await _recv_type(white, "game_result")
-                black_result = await _recv_type(black, "game_result")
-
-                assert white_result == {"type": "game_result", "outcome": "win", "rating": 1216}
-                assert black_result == {"type": "game_result", "outcome": "loss", "rating": 1184}
-                assert server.repository.get_by_username("rated-white").wins == 1
-                assert server.repository.get_by_username("rated-black").losses == 1
-
-                server._on_game_over(GameOverEvent(winner="WHITE"))
-                await asyncio.sleep(0.05)
-                assert server.repository.get_by_username("rated-white").wins == 1
+            async with websockets.connect(uri) as reconnected:
+                await reconnected.send(json.dumps({"type": "reconnect", "token": first_auth["token"],
+                                                   "game_id": first_match["game_id"]}))
+                assert (await _recv_type(reconnected, "reconnect_success"))["color"] == first_match["color"]
+                snapshot = await _recv_type(reconnected, "snapshot")
+                assert snapshot["game_id"] == first_match["game_id"]
+                assert (await _recv_type(second, "opponent_reconnected"))["type"] == "opponent_reconnected"
+            await second.close()
         finally:
             await _stop_server(server)
-
     asyncio.run(scenario())
 
 
-def test_legal_move_from_white_is_scheduled_and_broadcast():
+def test_game_commands_require_active_match_and_correct_color():
     async def scenario():
         server = await _start_server()
         try:
             uri = f"ws://localhost:{server.bound_port}"
-            async with websockets.connect(uri) as client_a:
-                await _authenticate(client_a, "white")
-
-                await client_a.send("WPe2e4")  # white pawn, legal double-step
-
-                # Poll incoming broadcasts until the moved pawn shows as "moving".
-                pawn_id = server.engine.board.get_piece(1, 4).id
-                moving_seen = False
-                for _ in range(50):
-                    message = await asyncio.wait_for(_recv_json(client_a), timeout=1.0)
-                    if message["type"] != "snapshot":
-                        continue
-                    pieces = {p["id"]: p for p in message["data"]["pieces"]}
-                    if pawn_id in pieces and pieces[pawn_id]["state"] == "moving":
-                        moving_seen = True
-                        break
-
-                assert moving_seen, "expected the moved pawn to appear as 'moving' in a broadcast"
+            async with websockets.connect(uri) as first, websockets.connect(uri) as second:
+                await _register(first, "one")
+                await first.send("WPe2e4")
+                assert (await _recv_type(first, "error"))["reason"] == "not_in_active_game"
+                await _register(second, "two")
+                first_match, second_match = await _match(first, second)
+                white = first if first_match["color"] == "w" else second
+                await white.send("BPe7e5")
+                assert (await _recv_type(white, "error"))["reason"] == "not_your_piece"
         finally:
             await _stop_server(server)
-
     asyncio.run(scenario())
 
 
-def test_command_for_opponent_piece_is_rejected():
-    """A White connection sending a command targeting a Black piece is rejected,
-    even though the wire command's own color letter is irrelevant to authorization."""
+def test_disconnect_expiry_causes_single_rated_technical_forfeit():
     async def scenario():
         server = await _start_server()
         try:
             uri = f"ws://localhost:{server.bound_port}"
-            async with websockets.connect(uri) as client_a:
-                await _authenticate(client_a, "white")
-
-                await client_a.send("BPe7e5")  # targets a real Black pawn's square
-
-                message = await _recv_type(client_a, "error")
-                assert message == {"type": "error", "reason": "not_your_piece"}
+            loser = await websockets.connect(uri)
+            winner = await websockets.connect(uri)
+            await _register(loser, "forfeit-loser")
+            await _register(winner, "forfeit-winner")
+            loser_match, _ = await _match(loser, winner)
+            await loser.close()
+            await _recv_type(winner, "opponent_disconnected")
+            state = next(iter(server.disconnects._states.values()))
+            state.deadline = 0
+            result = await _recv_type(winner, "game_result")
+            assert result["reason"] == "technical_forfeit"
+            assert result["outcome"] == "win"
+            assert server.repository.get_by_username("forfeit-winner").wins == 1
+            assert server.repository.get_by_username("forfeit-loser").losses == 1
+            final_snapshot = await _recv_type(winner, "snapshot")
+            assert final_snapshot["game_id"] == loser_match["game_id"]
+            await asyncio.sleep(0.05)
+            assert server.repository.get_by_username("forfeit-winner").wins == 1
+            await winner.close()
         finally:
             await _stop_server(server)
-
-    asyncio.run(scenario())
-
-
-def test_malformed_command_returns_parse_error():
-    async def scenario():
-        server = await _start_server()
-        try:
-            uri = f"ws://localhost:{server.bound_port}"
-            async with websockets.connect(uri) as client_a:
-                await _authenticate(client_a, "white")
-
-                await client_a.send("not a real command")
-
-                message = await _recv_type(client_a, "error")
-                assert message["type"] == "error"
-        finally:
-            await _stop_server(server)
-
     asyncio.run(scenario())

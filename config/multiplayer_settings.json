@@ -12,5 +12,18 @@
     "salt_bytes": 16,
     "derived_key_bytes": 32
   },
-  "session": {"token_bytes": 32}
+  "session": {"token_bytes": 32},
+  "matchmaking": {
+    "elo_range": 100,
+    "queue_timeout_seconds": 60,
+    "poll_interval_seconds": 0.25
+  },
+  "disconnect": {
+    "grace_period_seconds": 25,
+    "countdown_interval_seconds": 1
+  },
+  "reconnect": {
+    "initial_delay_seconds": 0.5,
+    "maximum_delay_seconds": 4
+  }
 }

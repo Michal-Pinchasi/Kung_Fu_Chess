@@ -83,6 +83,14 @@ class RealTimeArbiter:
         piece.state = "jump"
         return jump
 
+    def cancel_piece_activities(self, piece) -> None:
+        """Remove every pending move/jump/rest owned by a captured piece."""
+        activities = [activity for activity in self.pending if activity.piece is piece]
+        for activity in activities:
+            if isinstance(activity, PendingJump):
+                self.status.pop(activity.pos, None)
+            self.pending.remove(activity)
+
     def get_move_progress(self, piece) -> Optional[Tuple[Position, Position, float]]:
         """Return (frm, to, progress 0..1) for piece's active PendingMove, or None."""
         for act in self.pending:

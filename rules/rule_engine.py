@@ -103,3 +103,16 @@ class RuleEngine:
             return "BLACK"
 
         return None
+
+    @staticmethod
+    def get_capture_winner(captured_pieces) -> Optional[str]:
+        """Return the winner from king captures in the resolving simulation tick."""
+        captured_king_colors = {
+            piece.color for piece in captured_pieces
+            if piece != EMPTY_SQUARE and piece.kind == PieceKind.KING
+        }
+        if captured_king_colors == {PieceColor.BLACK}:
+            return "WHITE"
+        if captured_king_colors == {PieceColor.WHITE}:
+            return "BLACK"
+        return None

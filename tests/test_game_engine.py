@@ -389,6 +389,34 @@ def test_attacker_can_target_a_square_another_piece_is_departing_from():
     assert board.get_piece(2, 2) == white_rook
     assert black_rook.state == "captured"
 
+    engine.wait(1000)
+    assert board.get_piece(2, 5) != black_rook
+    assert black_rook.state == "captured"
+
+
+def test_king_captured_while_fleeing_cannot_land_and_resurrect():
+    board = Board(8, 8)
+    white_king = Piece(id="wK_1", kind=PieceKind.KING, color=PieceColor.WHITE)
+    black_king = Piece(id="bK_1", kind=PieceKind.KING, color=PieceColor.BLACK)
+    white_rook = Piece(id="wR_1", kind=PieceKind.ROOK, color=PieceColor.WHITE)
+    board.add_piece(7, 7, white_king)
+    board.add_piece(1, 2, black_king)
+    board.add_piece(0, 2, white_rook)
+    engine = GameEngine(board)
+
+    assert engine.request_move(Position(0, 2), Position(1, 2)).is_accepted
+    engine.wait(500)  # attacker is halfway there before the king starts fleeing
+    assert engine.request_move(Position(1, 2), Position(1, 3)).is_accepted
+    engine.wait(500)  # attacker arrives; king still has 500ms left
+
+    assert engine.game_state.is_game_over
+    assert engine.game_state.winner == "WHITE"
+    assert black_king.state == "captured"
+
+    engine.wait(500)
+    assert board.get_piece(1, 3) != black_king
+    assert black_king.state == "captured"
+
 
 def test_snapshot_interpolates_position_partway_through_move():
     """Halfway through a 2-cell move, the piece snapshot sits one cell in."""

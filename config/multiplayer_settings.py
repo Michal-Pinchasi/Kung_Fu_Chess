@@ -1,6 +1,6 @@
 """Configurable settings for authenticated multiplayer."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import os
 
@@ -22,11 +22,33 @@ class PasswordSettings:
 
 
 @dataclass(frozen=True)
+class MatchmakingSettings:
+    elo_range: int = 100
+    queue_timeout_seconds: float = 60.0
+    poll_interval_seconds: float = 0.25
+
+
+@dataclass(frozen=True)
+class DisconnectSettings:
+    grace_period_seconds: float = 25.0
+    countdown_interval_seconds: float = 1.0
+
+
+@dataclass(frozen=True)
+class ReconnectSettings:
+    initial_delay_seconds: float = 0.5
+    maximum_delay_seconds: float = 4.0
+
+
+@dataclass(frozen=True)
 class MultiplayerSettings:
     database_path: str
     elo: EloSettings
     password: PasswordSettings
     session_token_bytes: int
+    matchmaking: MatchmakingSettings = field(default_factory=MatchmakingSettings)
+    disconnect: DisconnectSettings = field(default_factory=DisconnectSettings)
+    reconnect: ReconnectSettings = field(default_factory=ReconnectSettings)
 
 
 def load_settings(config_path: str | None = None) -> MultiplayerSettings:
@@ -35,6 +57,9 @@ def load_settings(config_path: str | None = None) -> MultiplayerSettings:
         raw = json.load(file)
     elo = raw["elo"]
     password = raw["password"]
+    matchmaking = raw.get("matchmaking", {})
+    disconnect = raw.get("disconnect", {})
+    reconnect = raw.get("reconnect", {})
     database_path = os.environ.get("KUNG_FU_CHESS_DB_PATH", raw["database_path"])
     return MultiplayerSettings(
         database_path=database_path,
@@ -46,4 +71,17 @@ def load_settings(config_path: str | None = None) -> MultiplayerSettings:
         ),
         password=PasswordSettings(**password),
         session_token_bytes=int(raw["session"]["token_bytes"]),
+        matchmaking=MatchmakingSettings(
+            elo_range=int(os.environ.get("KUNG_FU_CHESS_ELO_RANGE", matchmaking.get("elo_range", 100))),
+            queue_timeout_seconds=float(os.environ.get("KUNG_FU_CHESS_QUEUE_TIMEOUT", matchmaking.get("queue_timeout_seconds", 60))),
+            poll_interval_seconds=float(matchmaking.get("poll_interval_seconds", 0.25)),
+        ),
+        disconnect=DisconnectSettings(
+            grace_period_seconds=float(os.environ.get("KUNG_FU_CHESS_DISCONNECT_GRACE", disconnect.get("grace_period_seconds", 25))),
+            countdown_interval_seconds=float(disconnect.get("countdown_interval_seconds", 1)),
+        ),
+        reconnect=ReconnectSettings(
+            initial_delay_seconds=float(reconnect.get("initial_delay_seconds", 0.5)),
+            maximum_delay_seconds=float(reconnect.get("maximum_delay_seconds", 4)),
+        ),
     )

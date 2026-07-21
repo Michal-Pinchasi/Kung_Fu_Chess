@@ -1,5 +1,5 @@
-INFO:websockets.server:server listening on [::1]:8765
 INFO:websockets.server:server listening on 127.0.0.1:8765
+INFO:websockets.server:server listening on [::1]:8765
 INFO:__main__:GameServer listening on localhost:8765
 INFO:websockets.server:connection open
 INFO:websockets.server:connection open
