@@ -1,0 +1,52 @@
+{
+  "default_server_uri": "ws://localhost:8765",
+  "background_asset": "back_graound.jpg",
+  "board_asset": "board.jpg",
+  "pieces_asset": "pieces2",
+  "login": {
+    "panel": [260, 180, 780, 550],
+    "title": [450, 270, 1.4],
+    "heading": [560, 325, 1.0],
+    "username": [430, 380],
+    "password": [430, 490],
+    "mode_button": [500, 610, 340, 55],
+    "mode_text": [535, 647, 0.5],
+    "help_text": [420, 700, 0.55],
+    "status": [430, 585, 0.65],
+    "field_width": 450,
+    "field_height": 55,
+    "field_label_size": 0.65,
+    "field_value_size": 0.8,
+    "field_top_offset": 15,
+    "field_text_x_offset": 12,
+    "field_text_y_offset": 52
+  },
+  "account_status": {
+    "panel": [20, 20, 315, 75],
+    "identity": [35, 65, 0.58],
+    "result": [385, 85, 0.75]
+  },
+  "network_status": {
+    "reconnecting_panel": [360, 340, 610, 130],
+    "reconnecting_text": [410, 415, 0.8],
+    "disconnect_panel": [365, 330, 600, 150],
+    "disconnect_title": [440, 395, 0.85],
+    "disconnect_countdown": [460, 445, 0.72]
+  },
+  "colors": {
+    "panel": [20, 20, 20, 255],
+    "dark_panel": [10, 10, 10, 255],
+    "accent": [40, 215, 255, 255],
+    "white": [255, 255, 255, 255],
+    "error": [0, 0, 255, 255],
+    "warning": [0, 180, 255, 255],
+    "pending": [0, 220, 255, 255]
+  },
+  "alpha": {
+    "panel": 0.75,
+    "login_panel": 0.88,
+    "network_panel": 0.9
+  },
+  "text_thickness": 2,
+  "title_thickness": 3
+}

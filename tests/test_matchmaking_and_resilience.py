@@ -63,6 +63,19 @@ def test_disconnect_countdown_can_be_cancelled_on_reconnect():
     assert manager.expired() == []
 
 
+def test_disconnect_states_can_be_cleared_for_finished_game():
+    manager = DisconnectManager(25, clock=lambda: 0)
+    manager.start("finished", 1)
+    manager.start("finished", 2)
+    manager.start("active", 3)
+
+    manager.cancel_game("finished")
+
+    assert not manager.contains("finished", 1)
+    assert not manager.contains("finished", 2)
+    assert manager.contains("active", 3)
+
+
 def test_disconnect_expiration_and_grace_validation():
     now = [0.0]
     manager = DisconnectManager(20, clock=lambda: now[0])
@@ -71,6 +84,16 @@ def test_disconnect_expiration_and_grace_validation():
     assert manager.expired()[0].user_id == 1
     with pytest.raises(ValueError):
         DisconnectManager(19)
+
+
+def test_disconnect_cannot_be_cancelled_after_deadline():
+    now = [0.0]
+    manager = DisconnectManager(20, clock=lambda: now[0])
+    manager.start("game", 1)
+    now[0] = 20
+
+    assert not manager.cancel("game", 1)
+    assert not manager.contains("game", 1)
 
 
 def test_client_ignores_out_of_order_snapshots():

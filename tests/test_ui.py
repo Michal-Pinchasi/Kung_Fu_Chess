@@ -234,3 +234,68 @@ class TestGameScene:
         h, w = frame.img.shape[:2]
         assert w == Layout.WINDOW_WIDTH
         assert h == Layout.WINDOW_HEIGHT
+
+
+class TestNetworkUiConfiguration:
+
+    def test_network_layout_is_loaded_from_json(self):
+        from view.ui.config.network_ui_loader import load_network_ui_settings
+
+        settings = load_network_ui_settings()
+
+        assert settings.default_server_uri.startswith("ws://")
+        assert len(settings.login["panel"]) == 4
+        assert len(settings.colors["accent"]) == 4
+
+    def test_named_key_bindings_recognize_both_letter_cases(self):
+        from view.ui.input.key_bindings import KeyBindings
+
+        assert KeyBindings.is_key(ord("q"), "q")
+        assert KeyBindings.is_key(ord("Q"), "q")
+        assert KeyBindings.ESCAPE not in KeyBindings.ENTER
+
+
+class TestGameResultPresenter:
+
+    class _Renderer:
+        def __init__(self):
+            self.call = None
+
+        def draw_match_result(
+            self, frame, winner_name, winner_color, is_draw=False
+        ):
+            self.call = (frame, winner_name, winner_color, is_draw)
+
+    class _Client:
+        username = "michal"
+        color = "w"
+        opponent = {"username": "yehudit"}
+
+        def __init__(self, result):
+            self.game_result = result
+
+    def test_authoritative_winner_is_forwarded_to_overlay(self):
+        from view.ui.presenters.game_result_presenter import GameResultPresenter
+
+        renderer = self._Renderer()
+        client = self._Client(
+            {
+                "outcome": "loss",
+                "winner": {"username": "yehudit", "color": "BLACK"},
+            }
+        )
+
+        GameResultPresenter(renderer).draw("frame", client)
+
+        assert renderer.call == ("frame", "yehudit", "BLACK", False)
+
+    def test_draw_result_uses_draw_mode(self):
+        from view.ui.presenters.game_result_presenter import GameResultPresenter
+
+        renderer = self._Renderer()
+
+        GameResultPresenter(renderer).draw(
+            "frame", self._Client({"outcome": "draw"})
+        )
+
+        assert renderer.call == ("frame", None, None, True)

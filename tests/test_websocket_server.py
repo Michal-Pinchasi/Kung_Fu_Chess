@@ -50,6 +50,16 @@ async def _register(connection, username):
     return auth
 
 
+async def _login(connection, username):
+    await connection.send(json.dumps({
+        "type": "auth",
+        "mode": "login",
+        "username": username,
+        "password": "password",
+    }))
+    return await _recv_type(connection, "auth_result")
+
+
 async def _match(first, second):
     await first.send(json.dumps({"type": "join_queue"}))
     await _recv_type(first, "queue_joined")
@@ -124,6 +134,37 @@ def test_disconnect_reconnect_restores_latest_snapshot():
     asyncio.run(scenario())
 
 
+def test_login_from_new_client_automatically_resumes_disconnected_game():
+    async def scenario():
+        server = await _start_server()
+        try:
+            uri = f"ws://localhost:{server.bound_port}"
+            disconnected = await websockets.connect(uri)
+            opponent = await websockets.connect(uri)
+            await _register(disconnected, "resume-login")
+            await _register(opponent, "resume-opponent")
+            match, _ = await _match(disconnected, opponent)
+            await _recv_type(disconnected, "snapshot")
+            await disconnected.close()
+            await _recv_type(opponent, "opponent_disconnected")
+
+            async with websockets.connect(uri) as replacement:
+                await _login(replacement, "resume-login")
+                resumed = await _recv_type(replacement, "reconnect_success")
+                assert resumed["game_id"] == match["game_id"]
+                assert resumed["room_id"] == match["room_id"]
+                snapshot = await _recv_type(replacement, "snapshot")
+                assert snapshot["game_id"] == match["game_id"]
+                assert (
+                    await _recv_type(opponent, "opponent_reconnected")
+                )["username"] == "resume-login"
+            await opponent.close()
+        finally:
+            await _stop_server(server)
+
+    asyncio.run(scenario())
+
+
 def test_game_commands_require_active_match_and_correct_color():
     async def scenario():
         server = await _start_server()
@@ -164,6 +205,12 @@ def test_disconnect_expiry_causes_single_rated_technical_forfeit():
             assert server.repository.get_by_username("forfeit-loser").losses == 1
             final_snapshot = await _recv_type(winner, "snapshot")
             assert final_snapshot["game_id"] == loser_match["game_id"]
+            assert server.games.get(loser_match["game_id"]) is None
+            assert server.rooms.for_game(loser_match["game_id"]) is None
+            await winner.send(json.dumps({"type": "join_queue"}))
+            assert (
+                await _recv_type(winner, "queue_joined")
+            )["type"] == "queue_joined"
             await asyncio.sleep(0.05)
             assert server.repository.get_by_username("forfeit-winner").wins == 1
             await winner.close()

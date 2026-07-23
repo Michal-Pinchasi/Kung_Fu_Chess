@@ -1,122 +1,167 @@
-# View Architecture Specification — Kung Fu Chess
+# View Architecture Specification - Kung Fu Chess (Phases 1-5)
 
-## מטרה
+## Principle
 
-לשמור על ממשק משתמש גרפי שמציג את מצב המשחק בלבד ומעביר פעולות משתמש
-למנוע המקומי או לשרת. שכבת התצוגה אינה מכילה חוקי שחמט ואינה משנה את
-הלוח ישירות.
+The OpenCV layer renders client state and translates input into client actions. It does not evaluate chess legality, assign room roles, calculate ELO, access SQLite, or mutate the authoritative board.
 
-## מבנה התצוגה
+## Composition
 
 ```text
 view/ui/net_app.py
-  ├─ RemoteGameClient          חיבור WebSocket ברקע
-  ├─ RemoteEngine              מתאם לממשק GameEngine הקיים
-  ├─ Controller + MouseHandler קלט עכבר
-  └─ GameScene                 ציור פריים
-       ├─ GameCanvas
-       ├─ BoardRenderer
-       ├─ PieceRenderer
-       ├─ OverlayRenderer
-       └─ MoveHistoryRenderer
+`-- NetworkGameApp (screen transitions and resource lifetime)
+    |-- LoginScreen + LoginScreenRenderer
+    |-- LobbyScreen + RoomScreenRenderer
+    |-- RemoteGameClient (threaded network state machine)
+    |-- RemoteEngine (GameEngine-shaped network adapter)
+    |-- Controller + MouseHandler (player input only)
+    `-- GameScene
+        |-- GameCanvas
+        |-- BoardRenderer
+        |-- PieceRenderer
+        |-- MoveHistoryRenderer
+        `-- OverlayRenderer
 ```
 
-## נקודת הכניסה
+`network_ui.json` owns network-screen coordinates, colors, opacity, asset names, and the default server URI. `KeyBindings` gives OpenCV key codes semantic names.
 
-### משחק מקומי ישן
+## Client states
 
-`view/ui/app.py` יוצר `GameEngine` ולוח מקומיים באותו תהליך. הוא נשאר
-זמין לבדיקות ולמצב משחק מקומי ללא רשת.
+`ConnectionState` defines:
 
-### משחק רשת
+```text
+CONNECTING
+AUTHENTICATING
+LOBBY
+IN_ROOM
+SEARCHING
+PLAYING
+SPECTATING
+RECONNECTING
+GAME_OVER
+CLOSED
+```
 
-`view/ui/net_app.py` הוא נקודת הכניסה ללקוח משחק רשת.
+UI transitions are driven by server events received by `RemoteGameClient`.
 
-1. יוצר `RemoteGameClient` ומתחבר לשרת.
-2. ממתין לקבלת צבע (`w` או `b`).
-3. יוצר `RemoteEngine`.
-4. בונה את אותם רכיבי ציור קיימים.
-5. מריץ לולאת OpenCV עד לחיצה על `Q` או `Esc`.
+## Screen flow
 
-## תפקיד הרכיבים
+```text
+Login/Register
+  -> Room Menu
+      |-- Quick Play -> Searching
+      |-- Create Room -> In Room / waiting
+      `-- Join Room -> Playing or Spectating
+  -> Game Scene
+  -> Game Over overlay
+```
 
-| קובץ | אחריות |
+## Login screen
+
+- Click the on-screen mode button to switch Login/Register.
+- `Tab` changes the active field.
+- `Enter` submits credentials.
+- `Esc` exits.
+- Printable letters such as `R`, `r`, `Q`, and `q` are always treated as credential input.
+
+The mode switch deliberately does not use a printable character.
+
+## Room menu
+
+`RoomScreenRenderer` owns all room-menu drawing. `LobbyScreen` owns input routing and calls:
+
+```text
+RemoteGameClient.join_queue
+RemoteGameClient.leave_queue
+RemoteGameClient.create_room
+RemoteGameClient.join_room
+RemoteGameClient.leave_room
+```
+
+The room menu supports buttons and keyboard actions. Room IDs are normalized by the client and validated by the server.
+
+## Player versus spectator UI
+
+For White/Black, `NetworkGameApp` registers `MouseHandler` with the existing controller.
+
+For Spectator:
+
+- `MouseHandler` is not registered.
+- The account overlay displays `SPECTATOR`.
+- `RemoteGameClient.send_command` rejects commands.
+- The server independently enforces `spectator_read_only`.
+
+The spectator still receives and renders the same authoritative snapshots as both players.
+
+## Render flow
+
+```text
+GameServer snapshot JSON
+  -> RemoteGameClient sequence validation
+  -> snapshot_deserializer
+  -> RemoteEngine.snapshot
+  -> GameScene.render
+  -> OpenCV frame
+```
+
+`RemoteGameClient` ignores snapshots for a different game ID and ignores sequences older than or equal to the last accepted sequence.
+
+## Input flow
+
+```text
+OpenCV mouse event
+  -> MouseHandler
+  -> Controller
+  -> RemoteEngine
+  -> RemoteGameClient.send_command
+  -> WebSocket
+  -> server authorization
+  -> GameEngine
+```
+
+The local selected cell is view-only state and is not part of the authoritative server snapshot.
+
+## Network resilience presentation
+
+During reconnect, the client displays a connection-loss overlay while retrying with configurable exponential backoff.
+
+When an opponent disconnects, players and spectators see the server-provided countdown. A successful reconnect clears it; expiration produces a technical-forfeit result.
+
+If the OpenCV window is closed and a new client is opened during the grace period, the user signs in normally. The server returns `reconnect_success`, `LoginScreen` accepts the restored `PLAYING`/`SPECTATING` state, and `NetworkGameApp` skips the lobby. Quick Play is only for new matches.
+
+## Game-over rendering
+
+`OverlayRenderer.draw_match_result` owns the final result drawing. It displays:
+
+```text
+GAME OVER
+<username> | <WHITE/BLACK> | WINS
+```
+
+or `DRAW`.
+
+The winner identity comes from the authoritative `game_result` event. A final snapshot is applied after the result so the displayed board reflects completed captures.
+
+## Client logging
+
+Each OpenCV client owns a separate rotating log file under the configured client-log directory. The client records lifecycle, room, role, state, reconnect, result, and error events without credentials or tokens.
+
+## Local launcher
+
+`start_local_match.py` starts one server and a configurable number of clients:
+
+```text
+player_capacity + local_spectator_windows
+```
+
+The default is three windows: two potential players and one spectator client. Actual roles are always determined by room join order, not process launch order.
+
+## SRP boundaries
+
+| Layer | Must not do |
 | --- | --- |
-| `view/ui/net_app.py` | הרכבת חלון משחק רשת ולולאת הציור. |
-| `network/client/remote_game_client.py` | קליטת snapshots ושליחת פקודות ברקע, ללא חסימת OpenCV. |
-| `network/client/remote_engine.py` | API תואם ל-`GameEngine` עבור `Controller` ו-`GameScene`. |
-| `input/controller.py` | פרוטוקול שתי לחיצות: בחירת מקור ואז יעד. |
-| `view/ui/input/mouse_handler.py` | המרת אירועי OpenCV לקריאות ל־Controller. |
-| `view/ui/scene/game_scene.py` | תיאום ציור כל רכיבי המסך מתוך `snapshot()`. |
-| `view/ui/rendering/*` | ציור לוח, כלים, בחירה, ניקוד והיסטוריה. |
-
-## זרימת תצוגה
-
-```text
-GameServer
-    │ snapshot JSON
-    ▼
-RemoteGameClient
-    │ GameSnapshot
-    ▼
-RemoteEngine.snapshot()
-    ▼
-GameScene.render()
-    ▼
-OpenCV window
-```
-
-הלקוח אינו מחשב חוקיות מהלכים ואינו מתקדם בזמן. השרת שולח את המצב
-העדכני, והלקוח מצייר אותו.
-
-## זרימת קלט
-
-```text
-לחיצה שמאלית
-  → MouseHandler
-  → Controller
-  → RemoteEngine.request_move()
-  → RemoteGameClient.send_command()
-  → WebSocket server
-```
-
-- לחיצה שמאלית ראשונה בוחרת כלי של השחקן המקומי.
-- לחיצה שמאלית שנייה מגדירה משבצת יעד ושולחת מהלך.
-- לחיצה ימנית שולחת בקשת `Jump`.
-- אימות סופי של בעלות וחוקיות הפעולה מתבצע בשרת בלבד.
-
-## מצב בחירה
-
-`selected_cell` הוא מצב ממשק מקומי בלבד. הוא נשמר ב־`Controller` של
-אותו חלון כדי לסמן את המשבצת שנבחרה. הוא אינו חלק ממצב המשחק הסמכותי
-בשרת ואינו נשלח לשחקן השני.
-
-## הפרדת אחריות
-
-| שכבה | אסור לה לעשות |
-| --- | --- |
-| Renderers | לשנות לוח או להחליט אם מהלך חוקי. |
-| RemoteGameClient | לפרש חוקי משחק או לצייר. |
-| RemoteEngine | לעדכן את זמן המשחק המקומית. |
-| Server | לגשת לעכבר, ל־OpenCV או לנכסי תמונה. |
-
-## הפעלת שני חלונות
-
-`start_local_match.py` יוצר שלושה תהליכים:
-
-```text
-GameServer
-Player 1 window (White)
-Player 2 window (Black)
-```
-
-כל חלון הוא לקוח עצמאי ולכן ניתן ללחוץ ולשחק בו בנפרד, אך שניהם מקבלים
-את אותו snapshot מהשרת.
-
-## הרחבות עתידיות
-
-- הודעת סטטוס חיבור/ניתוק בתוך החלון.
-- צליל ואנימציות מבוססי Message Bus.
-- מסך התחברות ובחירת חדר.
-- מצב צפייה.
-- תמיכה בדפדפן במקום OpenCV.
+| Renderers | Send network messages, mutate the board, or decide permissions. |
+| `net_app.py` | Contain screen logic or hard-coded layout values; it is an entry point only. |
+| Screens | Calculate ELO, access SQL, validate chess moves, or draw unrelated screens. |
+| `RemoteGameClient` | Draw OpenCV elements or decide chess legality. |
+| `RemoteEngine` | Advance authoritative time or persist state. |
+| Server | Import OpenCV or depend on UI assets. |

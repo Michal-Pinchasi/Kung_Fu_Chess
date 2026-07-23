@@ -27,7 +27,16 @@ class DisconnectManager:
         return state
 
     def cancel(self, game_id: str, user_id: int) -> bool:
-        return self._states.pop((game_id, user_id), None) is not None
+        state = self._states.pop((game_id, user_id), None)
+        return state is not None and state.deadline > self._clock()
+
+    def contains(self, game_id: str, user_id: int) -> bool:
+        return (game_id, user_id) in self._states
+
+    def cancel_game(self, game_id: str) -> None:
+        keys = [key for key in self._states if key[0] == game_id]
+        for key in keys:
+            self._states.pop(key, None)
 
     def updates(self) -> list[tuple[DisconnectState, int]]:
         now = self._clock()

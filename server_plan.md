@@ -1,111 +1,166 @@
-# Server Plan — Kung Fu Chess (Phase 1)
+# Server Architecture - Kung Fu Chess (Phases 1-5)
 
-## מטרה
+## Purpose
 
-להריץ משחק Kung Fu Chess יחיד על המחשב המקומי, כאשר השרת הוא מקור האמת
-היחיד עבור הלוח, חוקי המשחק, הזמן, הניקוד ותוצאת המשחק. שני לקוחות
-גרפיים מתחברים אליו דרך WebSocket ומציגים את אותו מצב לוח.
+The WebSocket server is the only authority for authentication, rooms, roles, game state, timing, legality, results, statistics, and ELO. Clients render snapshots and submit intentions; they never mutate authoritative state.
 
-## גבולות שלב 1
-
-- שרת אחד, תהליך Python אחד.
-- כתובת מקומית בלבד: `ws://localhost:8765`.
-- שני שחקנים לכל היותר.
-- החיבור הראשון מקבל לבן; השני מקבל שחור.
-- אין צופים, חדרי משחק, התחברות מרחוק או מסד נתונים בשלב זה.
-
-## רכיבים
-
-| קובץ | אחריות |
-| --- | --- |
-| `network/websocket_server.py` | שרת ה-WebSocket, ניהול חיבורים, קצב העדכון ושידור snapshots. |
-| `network/session_manager.py` | שיוך לבן/שחור והרשאת פקודות לפי הכלי שעל הלוח. |
-| `network/command_parser.py` | פענוח פקודות רשת כגון `WPe2e4` ו-`WPe2J`. |
-| `network/snapshot_serializer.py` | המרת `GameSnapshot` למבנה JSON לשידור. |
-| `engin/game_engine.py` | מנוע חוקי המשחק, אנימציות, זמן, ניקוד ותוצאת המשחק. |
-| `events/message_bus.py` | ערוץ Pub/Sub פנימי לאירועי משחק. |
-| `events/game_events.py` | הגדרת אירועי מהלך, Jump, ניקוד וסיום משחק. |
-
-## זרימת חיבור
+## Composition
 
 ```text
-Client 1 ── connect ──> GameServer ──> assigned_color: w
-Client 2 ── connect ──> GameServer ──> assigned_color: b
-Client 3 ── connect ──> GameServer ──> error: game_full, then close
+GameServer
+|-- UserRepository (SQLite persistence)
+|-- AuthService (registration, verification, session tokens)
+|-- MatchmakingManager (rating queue and timeout)
+|-- RoomManager (room registry and membership indexes)
+|   `-- GameRoom (roles, occupants, room state)
+|-- GameRegistry (game registry and user indexes)
+|   `-- GameSession (one GameEngine and two player slots)
+|-- DisconnectManager (grace-period deadlines)
+|-- GameResultService + EloCalculator
+`-- LoggingService + GameEventAuditor
 ```
 
-בעת ניתוק של לקוח, הצבע שלו משתחרר ויכול להינתן ללקוח הבא שמתחבר.
+## Responsibility boundaries
 
-## פרוטוקול הודעות
+| Component | Responsibility |
+| --- | --- |
+| `network/websocket_server.py` | Protocol routing and dependency composition. |
+| `rooms/room_manager.py` | Secure room creation and indexed lookup. |
+| `rooms/game_room.py` | Membership, roles, connections, and room state. |
+| `matchmaking/matchmaking_manager.py` | Rating-aware queue, pairing, leave, and timeout. |
+| `network/game_registry.py` | Creation and lookup of independent game sessions. |
+| `network/game_session.py` | Runtime and authorization for one match. |
+| `network/disconnect_manager.py` | Grace-period countdown state only. |
+| `services/auth_service.py` | Password verification and session-token ownership. |
+| `storage/user_repository.py` | SQL and transactional user/statistics persistence. |
+| `services/elo_calculator.py` | Pure configurable ELO mathematics. |
+| `services/game_result_service.py` | Coordinate one persisted result. |
+| `observability/logging_service.py` | Rotating logging and sensitive-data filtering. |
+| `observability/game_event_auditor.py` | Bridge MessageBus events into audit logs. |
 
-### פקודות לקוח → שרת
+## Authentication flow
 
-| פעולה | פורמט | דוגמה |
-| --- | --- | --- |
-| מהלך | `<Color><Kind><From><To>` | `WPe2e4` |
-| Jump | `<Color><Kind><Square>J` | `WPe2J` |
-
-`Color` הוא `W` או `B`, וסוגי הכלים הם `K`, `Q`, `R`, `B`, `N`, `P`.
-השרת אינו סומך על הצבע והסוג שנשלחו: הוא בודק מול הלוח החי שהכלי שייך
-לשחקן המחובר ושמותר לו לבצע את הפעולה.
-
-### הודעות שרת → לקוח
-
-```json
-{"type": "assigned_color", "color": "w"}
+```text
+auth(register/login)
+  -> AuthService
+  -> PBKDF2 verification
+  -> server-owned User
+  -> auth_result (username, rating, token)
+  -> lobby_ready
 ```
 
-```json
-{"type": "snapshot", "data": {"board_width": 8, "board_height": 8, "pieces": []}}
+Credentials and tokens are never logged. The server derives identity and rating from the authenticated user rather than client claims.
+
+## Quick Play flow
+
+```text
+join_queue
+  -> MatchmakingManager.join
+  -> rating/time ordered search
+  -> mutual configured ELO window
+  -> RoomManager.create_for_match
+  -> GameRegistry.create
+  -> match_found + initial snapshot
 ```
 
-```json
-{"type": "error", "reason": "not_your_piece"}
+An unmatched entry expires after the configured timeout and receives `matchmaking_timeout`.
+
+## Private room flow
+
+```text
+create_room
+  -> secure Room ID
+  -> creator receives White
+
+join_room(room_id)
+  -> second member receives Black
+  -> game starts
+  -> later members receive Spectator
 ```
 
-ה־snapshot כולל את הכלים, מיקומיהם, מצב האנימציה, היסטוריית המהלכים,
-ניקוד ודגל סיום המשחק.
+Room roles are assigned only by the server. A spectator command is rejected before it reaches `GameEngine`.
 
-## לולאת המשחק
+## Game and snapshot flow
 
-1. `GameServer` מתקדם כל `tick_ms` מילישניות (ברירת מחדל: 100).
-2. הוא מפעיל `GameEngine.wait(tick_ms)`.
-3. מנוע המשחק מסיים תנועות, לכידות, מנוחות ו־Jump לפי חוקי המשחק.
-4. השרת ממיר את המצב ל־JSON ומשדר snapshot לכל הלקוחות המחוברים.
+Each match owns an independent `GameEngine`, board, MessageBus, sequence counter, and result guard.
 
-## Message Bus
-
-המנוע מפרסם אירועים פנימיים, בלי תלות בשרת או בממשק:
-
-- `MOVE_STARTED`
-- `JUMP_STARTED`
-- `MOVE_COMPLETED`
-- `SCORE_CHANGED`
-- `GAME_OVER`
-
-בשלב 1 השרת נרשם ל־`GAME_OVER` כדי לשדר מצב מעודכן מיד. בעתיד ניתן
-להירשם לאותם אירועים עבור סאונד, אנימציות, לוגים או שמירה למסד נתונים.
-
-## הפעלה
-
-הפעלה ידנית של השרת:
-
-```powershell
-python -m network.websocket_server
+```text
+tick loop
+  -> GameSession.tick
+  -> GameEngine.wait
+  -> GameSession.next_snapshot
+  -> serialize(game_id, sequence, state)
+  -> broadcast to every connected GameRoom member
 ```
 
-הפעלה מקומית של שרת ושני לקוחות:
+Clients discard snapshots whose sequence is not newer than their last accepted sequence.
 
-```powershell
-python start_local_match.py
+## Disconnect and reconnect flow
+
+Player disconnect:
+
+```text
+GameRoom.disconnect
+  -> GameSession.disconnect
+  -> DisconnectManager.start
+  -> countdown to opponent and spectators
 ```
 
-או בלחיצה כפולה על `start_local_match.bat`.
+Reconnect validates the session token, game ID, room membership, stored role, and grace deadline. Success replaces the socket, cancels the deadline, and sends the latest authoritative snapshot.
 
-## המשך אפשרי
+After a fresh client Login, `AuthenticationHandler` also checks the authenticated user's indexed game and disconnected room member. If the grace deadline is still active, it restores the new socket automatically and skips the lobby.
 
-- חדרי משחק ומזהה משחק.
-- צופים.
-- אימות משתמשים.
-- שמירת משחקים ולוג מהלכים.
-- שרת מרוחק עם TLS.
+Grace expiration calls the normal result path with `technical_forfeit`. `result_applied` ensures database statistics and ELO are updated once. Before clients receive the result, the game, room, user, and disconnect indexes are released so the next Quick Play request cannot race with cleanup.
+
+A spectator disconnect does not start a forfeit deadline and does not affect the game.
+
+## Game-over consistency
+
+When a moving piece is captured, `RealTimeArbiter.cancel_piece_activities` removes its pending move/jump/rest. A captured king therefore cannot land later and reappear.
+
+The winner is derived from the captured king color in the resolving tick. After `game_result`, the server broadcasts an authoritative final snapshot so clients never remain on an in-flight frame.
+
+## WebSocket messages
+
+Client to server:
+
+```text
+auth
+join_queue
+leave_queue
+create_room
+join_room
+leave_room
+reconnect
+Move command
+Jump command
+```
+
+Server to client:
+
+```text
+auth_result / auth_error
+lobby_ready
+queue_joined / queue_left / matchmaking_timeout / matchmaking_error
+room_created / room_joined / room_left / room_state / room_error
+match_found
+snapshot
+opponent_disconnected / opponent_reconnected
+reconnect_success
+game_result
+error
+```
+
+## Logging and auditing
+
+Server and client loggers use rotating files. The server audits connection lifecycle, authentication outcome, queue operations, room creation/join, role assignment, accepted commands, rejected spectator commands, disconnect/reconnect, game results, and MessageBus events.
+
+`SensitiveDataFilter` recursively redacts password, hash, salt, token, session-token, and authorization fields before disk output.
+
+## Verification
+
+The automated non-interactive suite currently reports:
+
+```text
+233 passed, 1 skipped
+```

@@ -1,235 +1,30 @@
-"""Graphical WebSocket client for local two-player Kung Fu Chess."""
+"""Command-line entry point for the graphical network client."""
 
 import argparse
 import os
 import sys
 
-import cv2
-
-# Some existing UI modules use legacy absolute imports such as ``graphics``.
-# Include both this UI directory and the project root when launched with -m.
+# Legacy UI modules still use imports relative to this directory.
 sys.path.insert(0, os.path.dirname(__file__))
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+)
 
-from network.client.remote_engine import RemoteEngine
-from network.client.remote_game_client import RemoteGameClient
-from network.client.connection_state import ConnectionState
-from view.ui.app import ASSETS_DIR
-from view.ui.config.ui_config_loader import FPS, WINDOW_TITLE
-from view.ui.input.mouse_handler import MouseHandler
-from view.ui.rendering.board_renderer import BoardRenderer
-from view.ui.rendering.move_history_renderer import MoveHistoryRenderer
-from view.ui.rendering.overlay_renderer import OverlayRenderer
-from view.ui.rendering.piece_renderer import PieceRenderer
-from view.ui.rendering.room_screen_renderer import RoomScreenRenderer
-from view.ui.scene.game_scene import GameScene
-from view.ui.window.game_canvas import GameCanvas
+from view.ui.config.network_ui_loader import load_network_ui_settings
+from view.ui.network_game_app import NetworkGameApp
 
 
-def app(uri: str = "ws://localhost:8765", window_name: str | None = None) -> None:
-    client = RemoteGameClient(uri)
-    client.connect()
-    canvas = GameCanvas(os.path.join(ASSETS_DIR, "back_graound.jpg"))
-    title = window_name or f"{WINDOW_TITLE} - Login"
-    first_frame = canvas.fresh_frame()
-    height, width = first_frame.img.shape[:2]
-    cv2.namedWindow(title, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(title, width, height)
-
-    if not _login_screen(client, canvas, title):
-        client.close()
-        cv2.destroyWindow(title)
-        return
-
-    if not _matchmaking_screen(client, canvas, title):
-        client.close()
-        cv2.destroyWindow(title)
-        return
-
-    engine = RemoteEngine(client)
-    overlay_renderer = OverlayRenderer()
-    scene = GameScene(canvas, BoardRenderer(os.path.join(ASSETS_DIR, "board.jpg")),
-                      PieceRenderer(os.path.join(ASSETS_DIR, "pieces2")), overlay_renderer, engine,
-                      MoveHistoryRenderer())
-    first_frame = scene.render()
-    cv2.imshow(title, first_frame.img)
-    if client.role != "spectator":
-        MouseHandler(engine.controller).register(title)
-
-    try:
-        while True:
-            frame = scene.render()
-            _draw_account_status(frame, client)
-            _draw_network_status(frame, client)
-            _draw_game_over_result(overlay_renderer, frame, client)
-            cv2.imshow(title, frame.img)
-            key = cv2.waitKey(1000 // FPS) & 0xFF
-            if key in (ord("q"), 27):
-                break
-    finally:
-        client.close()
-        cv2.destroyWindow(title)
-
-
-def _login_screen(client: RemoteGameClient, canvas: GameCanvas, title: str) -> bool:
-    """A keyboard-driven graphical login/register screen inside the game window."""
-    username, password, active_field = "", "", 0
-    register_mode, submitted = False, False
-    mode_clicked = [False]
-    mode_box = (500, 610, 340, 55)
-
-    def on_mouse(event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            box_x, box_y, box_w, box_h = mode_box
-            mode_clicked[0] = box_x <= x <= box_x + box_w and box_y <= y <= box_y + box_h
-
-    cv2.setMouseCallback(title, on_mouse)
-    while True:
-        frame = canvas.fresh_frame()
-        frame.draw_rect(260, 180, 780, 550, color=(20, 20, 20, 255), alpha=0.88)
-        frame.put_text("KUNG FU CHESS", 450, 270, 1.4, color=(40, 215, 255, 255), thickness=3)
-        frame.put_text("Create account" if register_mode else "Sign in", 560, 325, 1.0, thickness=2)
-        _field(frame, "Username", username, 430, 380, active_field == 0)
-        _field(frame, "Password", "*" * len(password), 430, 490, active_field == 1)
-        action = "REGISTER" if register_mode else "LOGIN"
-        frame.draw_rect(*mode_box, color=(40, 215, 255, 255), thickness=2)
-        frame.put_text(f"CLICK: switch to {'LOGIN' if register_mode else 'REGISTER'}", 535, 647, 0.5)
-        frame.put_text(f"ENTER: {action}   TAB: next field   ESC: exit", 420, 700, 0.55)
-        if submitted:
-            status = client.error or "Connecting..."
-            color = (0, 0, 255, 255) if client.error else (0, 220, 255, 255)
-            frame.put_text(status, 430, 585, 0.65, color=color, thickness=2)
-        cv2.imshow(title, frame.img)
-        key = cv2.waitKeyEx(1000 // FPS)
-        if key == 27:
-            return False
-        if client.username is not None and client.state == ConnectionState.LOBBY:
-            return True
-        if key == 9:
-            active_field = 1 - active_field
-        elif mode_clicked[0]:
-            mode_clicked[0] = False
-            register_mode, submitted, client.error = not register_mode, False, None
-        elif key in (8, 127):
-            if active_field == 0:
-                username = username[:-1]
-            else:
-                password = password[:-1]
-        elif key in (10, 13):
-            if username and password:
-                submitted = True
-                client.authenticate(username, password, register_mode)
-        elif 32 <= key <= 126:
-            if active_field == 0:
-                username += chr(key)
-            else:
-                password += chr(key)
-
-
-def _field(frame, label: str, value: str, x: int, y: int, active: bool) -> None:
-    frame.put_text(label, x, y, 0.65)
-    frame.draw_rect(x, y + 15, 450, 55, color=(255, 255, 255, 255), thickness=2 if active else 1)
-    frame.put_text(value, x + 12, y + 52, 0.8, color=(255, 255, 255, 255), thickness=2)
-
-
-def _matchmaking_screen(client: RemoteGameClient, canvas: GameCanvas, title: str) -> bool:
-    """Room menu and queue presentation; network state remains owned by the client."""
-    clicked_action = [None]
-    join_mode, room_code = False, ""
-    renderer = RoomScreenRenderer()
-
-    def on_mouse(event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            for action, box in renderer.action_boxes.items():
-                box_x, box_y, box_w, box_h = box
-                if box_x <= x <= box_x + box_w and box_y <= y <= box_y + box_h:
-                    clicked_action[0] = action
-
-    cv2.setMouseCallback(title, on_mouse)
-    while True:
-        frame = canvas.fresh_frame()
-        searching = client.state == ConnectionState.SEARCHING
-        in_room = client.state == ConnectionState.IN_ROOM
-        status = client.notification or "Choose how to play"
-        if in_room:
-            status = f"ROOM: {client.room_id} | {client.role.upper()} | Waiting for player..."
-        elif join_mode:
-            status = f"ROOM ID: {room_code}_"
-        renderer.draw(frame, client.username, client.rating, status)
-        cv2.imshow(title, frame.img)
-        key = cv2.waitKeyEx(1000 // FPS)
-        if client.state in (ConnectionState.PLAYING, ConnectionState.SPECTATING):
-            return True
-        if key in (27, ord("q"), ord("Q")):
-            return False
-        action, clicked_action[0] = clicked_action[0], None
-        if join_mode:
-            if key in (8, 127):
-                room_code = room_code[:-1]
-            elif key in (10, 13) and room_code:
-                client.join_room(room_code)
-                join_mode = False
-            elif 32 <= key <= 126 and chr(key).isalnum():
-                room_code += chr(key).upper()
-        elif action == "join" or key in (ord("j"), ord("J")):
-            join_mode, room_code = True, ""
-        elif action == "create" or key in (ord("c"), ord("C")):
-            client.create_room()
-        elif key in (ord("l"), ord("L")) and in_room:
-            client.leave_room()
-        elif action == "quick" or key in (10, 13, 32, ord("p"), ord("P")):
-            client.leave_queue() if searching else client.join_queue()
-
-
-def _draw_account_status(frame, client: RemoteGameClient) -> None:
-    """Keep the authenticated identity and persisted rating visible in-game."""
-    color_name = "SPECTATOR" if client.role == "spectator" else "WHITE" if client.color == "w" else "BLACK"
-    frame.draw_rect(20, 20, 315, 75, color=(20, 20, 20, 255), alpha=0.75)
-    frame.put_text(f"{client.username} | {color_name} | ELO {client.rating}", 35, 65, 0.58,
-                   color=(255, 255, 255, 255), thickness=2)
-    if client.game_result:
-        outcome = client.game_result["outcome"].upper()
-        frame.put_text(f"RESULT: {outcome} | NEW ELO: {client.rating}", 385, 85, 0.75,
-                       color=(40, 215, 255, 255), thickness=2)
-
-
-def _draw_network_status(frame, client: RemoteGameClient) -> None:
-    if client.state == ConnectionState.RECONNECTING:
-        frame.draw_rect(360, 340, 610, 130, color=(10, 10, 10, 255), alpha=0.9)
-        frame.put_text("CONNECTION LOST - RECONNECTING...", 410, 415, 0.8,
-                       color=(0, 180, 255, 255), thickness=2)
-    if client.opponent_disconnect_seconds is not None:
-        frame.draw_rect(365, 330, 600, 150, color=(10, 10, 10, 255), alpha=0.9)
-        frame.put_text("OPPONENT DISCONNECTED", 440, 395, 0.85,
-                       color=(0, 180, 255, 255), thickness=2)
-        frame.put_text(f"Technical win in {client.opponent_disconnect_seconds}s", 460, 445, 0.72,
-                       thickness=2)
-
-
-def _draw_game_over_result(renderer: OverlayRenderer, frame, client: RemoteGameClient) -> None:
-    """Translate the authoritative network result into renderer input."""
-    if not client.game_result:
-        return
-    outcome = client.game_result["outcome"]
-    winner = client.game_result.get("winner")
-    if outcome == "draw":
-        renderer.draw_match_result(frame, None, None, is_draw=True)
-        return
-    elif winner:
-        winner_name, winner_color = winner["username"], winner["color"]
-    elif outcome == "win":
-        winner_name = client.username
-        winner_color = "WHITE" if client.color == "w" else "BLACK"
-    else:
-        opponent = client.opponent or {"username": "OPPONENT"}
-        winner_name = opponent["username"]
-        winner_color = "BLACK" if client.color == "w" else "WHITE"
-    renderer.draw_match_result(frame, winner_name, winner_color)
+def app(uri=None, window_name=None) -> None:
+    settings = load_network_ui_settings()
+    NetworkGameApp(
+        uri or settings.default_server_uri, window_name, settings
+    ).run()
 
 
 if __name__ == "__main__":
+    ui_settings = load_network_ui_settings()
     parser = argparse.ArgumentParser(description="Kung Fu Chess network client")
-    parser.add_argument("--uri", default="ws://localhost:8765")
+    parser.add_argument("--uri", default=ui_settings.default_server_uri)
     parser.add_argument("--window-name")
-    args = parser.parse_args()
-    app(args.uri, args.window_name)
+    arguments = parser.parse_args()
+    app(arguments.uri, arguments.window_name)

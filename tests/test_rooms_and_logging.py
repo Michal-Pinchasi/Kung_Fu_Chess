@@ -41,6 +41,25 @@ def test_room_manager_creates_secure_ids_and_indexed_membership():
     assert manager.for_user(1) is room
 
 
+def test_room_manager_remove_clears_all_room_indexes():
+    manager = RoomManager(
+        RoomSettings(
+            player_capacity=2,
+            maximum_spectators=3,
+            room_id_bytes=6,
+        )
+    )
+    room, _ = manager.create(user(1), "first")
+    manager.join(room.room_id, user(2), "second")
+    manager.attach_game(room.room_id, "game")
+
+    assert manager.remove(room.room_id) is room
+    assert manager.get(room.room_id) is None
+    assert manager.for_user(1) is None
+    assert manager.for_user(2) is None
+    assert manager.for_game("game") is None
+
+
 def test_reconnect_preserves_room_role():
     room = GameRoom("ROOM", 2, 3)
     member = room.join(user(1), "old")

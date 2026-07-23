@@ -65,6 +65,16 @@ class RoomManager:
                 self._by_game.pop(room.game_id, None)
         return member
 
+    def remove(self, room_id: str) -> GameRoom | None:
+        room = self._rooms.pop(room_id.strip().upper(), None)
+        if room is None:
+            return None
+        for member in room.members():
+            self._by_user.pop(member.user.id, None)
+        if room.game_id:
+            self._by_game.pop(room.game_id, None)
+        return room
+
     def _unique_id(self) -> str:
         while True:
             room_id = secrets.token_urlsafe(self.settings.room_id_bytes).replace("-", "").replace("_", "").upper()

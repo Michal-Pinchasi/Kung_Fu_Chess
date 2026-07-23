@@ -61,5 +61,5 @@ ai-artifacts/*
 
 # Runtime audit and launcher output
 logs/
-launcher-out.log
-launcher-error.log
+*-out.log
+*-error.log
